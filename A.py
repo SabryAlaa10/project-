@@ -17,15 +17,51 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# تنسيق الواجهة العربية
+# تنسيق الواجهة العربية وتكبير الخط وتحسين الشريط الجانبي
 st.markdown("""
     <style>
+    /* الخط العام */
     body {direction: rtl; text-align: right;}
-    .stMarkdown, .stButton, .stSelectbox, .stTextInput, .stDateInput, .stNumberInput {direction: rtl; text-align: right;}
-    div[data-testid="stSidebar"] {text-align: right;}
     h1, h2, h3, h4, h5 {text-align: right; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;}
     .reportview-container .main .block-container {max-width: 95%;}
-    div[data-testid="stMetricValue"] {text-align: right;}
+    
+    /* تكبير حجم الخط في النص العادي والجداول */
+    html, body, .stText, .stMarkdown, .dataframe, .stTable {
+        font-size: 16px; 
+    }
+    
+    /* تكبير المدخلات والأزرار */
+    .stTextInput>div>div>input, .stSelectbox>div>div, .stButton>button {
+        font-size: 16px;
+        padding: 10px;
+    }
+
+    /* *** التعديل الجديد: تحسين الشريط الجانبي بالكامل *** */
+    div[data-testid="stSidebar"] {
+        text-align: right; 
+        font-size: 18px; /* حجم خط إجمالي أكبر */
+    }
+    
+    /* تكبير خط عنوان القائمة الجانبية */
+    div[data-testid="stSidebar"] .st-emotion-cache-1215bdr h1 {
+        font-size: 24px !important; /* حجم كبير للعنوان "القائمة الرئيسية" */
+    }
+
+    /* تكبير خط بيانات المستخدم */
+    div[data-testid="stSidebar"] .st-emotion-cache-1cypcdb {
+        font-size: 18px !important; /* حجم أكبر لـ "المستخدم: admin (Admin)" */
+        margin-bottom: 15px;
+    }
+
+    /* تكبير الخط والتباعد بين خيارات الصفحات */
+    .stRadio > label {
+        font-size: 18px !important; 
+        padding: 8px 0 !important;
+        margin-bottom: 5px; 
+    }
+    
+    /* مقاييس الأداء */
+    div[data-testid="stMetricValue"] {text-align: right; font-size: 24px !important;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -100,7 +136,6 @@ Base.metadata.create_all(engine)
 
 # ==========================================
 # 3. دوال مساعدة والبيانات الأولية (Seed Data)
-# (نفس دالة التهيئة السابقة، لم يتم تغييرها)
 # ==========================================
 def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
@@ -216,13 +251,13 @@ def init_seed_data():
 
         session.add_all(units_list)
         session.commit()
+
 init_seed_data()
 # ==========================================
 # 4. مكونات الواجهة
 # ==========================================
 
 def login_page():
-    # ... (دالة تسجيل الدخول لم تتغير)
     st.markdown("## 🔐 تسجيل الدخول")
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
@@ -240,16 +275,16 @@ def login_page():
         st.info("حسابات تجريبية: admin/admin123 | emp/emp123")
 
 def dashboard():
-    # ... (دالة لوحة التحكم لم تتغير)
     st.title("📊 لوحة المؤشرات (الأسبوعي)")
     
     # KPIs
     total_income = session.query(Payment).filter_by(status='مدفوع').with_entities(Payment.total).all()
     income_val = sum([x[0] for x in total_income])
     
-    overdue_count = session.query(Payment).filter(Payment.status != 'مدفوع', Payment.due_date < date.today()).count()
-    overdue_val_q = session.query(Payment).filter(Payment.status != 'مدفوع', Payment.due_date < date.today()).with_entities(Payment.total).all()
-    overdue_amount = sum([x[0] for x in overdue_val_q])
+    # الحصول على المتأخرات لتحديث KPIs والشارت الجديد
+    overdue_payments = session.query(Payment).filter(Payment.status != 'مدفوع', Payment.due_date < date.today()).all()
+    overdue_count = len(overdue_payments)
+    overdue_amount = sum([p.total for p in overdue_payments])
 
     empty_units = session.query(Unit).filter_by(status='فاضي').count()
     rented_units = session.query(Unit).filter_by(status='مؤجر').count()
@@ -278,6 +313,21 @@ def dashboard():
                 st.warning(f"العقد {exp.id} للمستأجر {exp.tenant.name} ينتهي في {exp.end_date}")
         else:
             st.success("لا توجد عقود قريبة الانتهاء")
+
+    st.markdown("---")
+    
+    # --- الرسم البياني الجديد ---
+    st.subheader("مقارنة الدفعات المتأخرة حسب المستفيد")
+    if overdue_payments:
+        overdue_df = pd.DataFrame([{'المبلغ': p.total, 'المستفيد': p.beneficiary} for p in overdue_payments])
+        
+        # تجميع حسب المستفيد
+        beneficiary_summary = overdue_df.groupby('المستفيد')['المبلغ'].sum().reset_index()
+        beneficiary_summary.columns = ['المستفيد', 'إجمالي المتأخرات']
+        
+        st.bar_chart(beneficiary_summary.set_index('المستفيد'), use_container_width=True)
+    else:
+        st.info("لا توجد دفعات متأخرة حالياً لعرض هذا التقرير.")
 
 def manage_assets():
     st.header("🏢 الأصول والوحدات")
@@ -329,7 +379,6 @@ def manage_assets():
          st.info("لا توجد أصول مُضافة بعد.")
 
 def manage_contracts():
-    # ... (دالة إدارة العقود لم تتغير)
     st.header("📄 إدارة العقود")
     if st.session_state['user_role'] == 'Admin':
         with st.expander("إنشاء عقد جديد"):
@@ -385,7 +434,6 @@ def manage_contracts():
 
 
 def manage_payments():
-    # ... (دالة إدارة الدفعات لم تتغير)
     st.header("💰 الدفعات (القواعد الخاصة)")
     
     st.info("💡 قاعدة محطة الوقود: الإيرادات قبل 1/8 للجمعية، وبعد 1/8 للمستثمر.")
@@ -471,11 +519,10 @@ def manage_payments():
                     st.success("تم الحفظ")
                     st.rerun()
 
-# دالة مساعدة لتحميل البيانات إلى CSV
 def get_csv_download_link(df, filename, label):
-    # تحويل DataFrame إلى CSV مع ترميز UTF-8-SIG لدعم العربية في Excel
+    # دالة مساعدة لتحميل البيانات إلى CSV
     csv = df.to_csv(index=False, encoding='utf-8-sig')
-    b64 = base64.b64encode(csv.encode()).decode()  # يجب ترميزه إلى base64 لتحميله
+    b64 = base64.b64encode(csv.encode()).decode()  
     href = f'<a href="data:file/csv;charset=utf-8-sig;base64,{b64}" download="{filename}">{label}</a>'
     return href
 
@@ -519,7 +566,7 @@ def reports_page():
             st.markdown(f"### 👤 {t_obj.name}")
             st.text(f"النوع: {t_obj.type} | الهاتف: {t_obj.phone}")
             
-            all_payments_data = [] # لتجميع كل الدفعات لملف الاكسل
+            all_payments_data = [] 
             
             # عقود المستأجر
             contracts = session.query(Contract).filter_by(tenant_id=t_obj.id).all()
@@ -562,10 +609,7 @@ def reports_page():
             st.markdown("---")
             # --- زر التحميل لملف اكسل (CSV) ---
             if all_payments_data:
-                # دمج كل دفعات المستأجر في DataFrame واحد
                 combined_df = pd.concat(all_payments_data, ignore_index=True)
-                
-                # إتاحة التحميل
                 csv_data = combined_df.to_csv(index=False).encode('utf-8-sig')
                 st.download_button(
                     label=f"⬇️ تحميل تقرير الدفعات لـ {t_sel} (CSV)",
@@ -573,10 +617,60 @@ def reports_page():
                     file_name=f"تقرير_دفعات_{t_sel}.csv",
                     mime="text/csv"
                 )
-            # -----------------------------------
+
+def settings_page():
+    st.header("⚙️ إعدادات المستخدم")
+    
+    if st.session_state['user_role'] == 'Admin':
+        user_to_edit_name = st.selectbox("اختر المستخدم للتعديل", [u.username for u in session.query(User).all()])
+        user_to_edit = session.query(User).filter_by(username=user_to_edit_name).first()
+
+        if user_to_edit:
+            with st.form("edit_user_settings"):
+                st.subheader(f"تعديل بيانات {user_to_edit_name}")
+                
+                # تغيير اسم المستخدم
+                new_username = st.text_input("اسم المستخدم الجديد", value=user_to_edit.username)
+                
+                # تغيير كلمة المرور
+                new_password = st.text_input("كلمة المرور الجديدة (اتركها فارغة لعدم التغيير)", type="password")
+                confirm_password = st.text_input("تأكيد كلمة المرور الجديدة", type="password")
+                
+                submitted = st.form_submit_button("حفظ التغييرات")
+                
+                if submitted:
+                    errors = []
+                    
+                    # 1. تحديث اسم المستخدم
+                    if new_username != user_to_edit.username:
+                        if session.query(User).filter(User.username == new_username, User.id != user_to_edit.id).first():
+                            errors.append("اسم المستخدم هذا محجوز مسبقاً.")
+                        else:
+                            user_to_edit.username = new_username
+                            st.session_state['username'] = new_username # تحديث الحالة الجلسة إذا كان هو المستخدم الحالي
+
+                    # 2. تحديث كلمة المرور
+                    if new_password:
+                        if new_password != confirm_password:
+                            errors.append("كلمة المرور وتأكيدها غير متطابقين.")
+                        else:
+                            user_to_edit.password_hash = hash_password(new_password)
+                    
+                    if errors:
+                        for err in errors:
+                            st.error(err)
+                    else:
+                        session.commit()
+                        st.success("تم تحديث الإعدادات بنجاح. يرجى تسجيل الخروج والدخول مرة أخرى للتحقق من التغييرات.")
+                        if new_username != user_to_edit_name:
+                             st.info("سيتم تسجيل خروجك لإكمال التحديث.")
+                        st.rerun()
+
+    else:
+        st.warning("ليس لديك صلاحية الوصول إلى هذه الإعدادات.")
 
 # ==========================================
-# 5. التشغيل الرئيسي
+# 5. التشغيل الرئيسي (main)
 # ==========================================
 def main():
     if 'logged_in' not in st.session_state:
@@ -585,24 +679,49 @@ def main():
     if not st.session_state['logged_in']:
         login_page()
     else:
+        user_role = st.session_state['user_role']
+        
+        # 1. تحديد خيارات القائمة حسب الدور
+        if user_role == 'Admin':
+            menu_options = [
+                "لوحة التحكم", 
+                "الأصول والوحدات", 
+                "إدارة المستأجرين", 
+                "العقود", 
+                "الدفعات المالية", 
+                "التقارير", 
+                "الإعدادات"
+            ]
+        elif user_role == 'Employee':
+            # تقييد الموظف بالصلاحيات المطلوبة فقط
+            menu_options = [
+                "لوحة التحكم", 
+                "الأصول والوحدات", 
+                "إدارة المستأجرين"
+            ]
+        else:
+             menu_options = ["لوحة التحكم"] # حالة افتراضية
+        
         with st.sidebar:
             st.title("القائمة الرئيسية")
-            st.write(f"المستخدم: {st.session_state['username']} ({st.session_state['user_role']})")
-            page = st.radio("الذهاب إلى", [
-                "لوحة التحكم", "الأصول والوحدات", "إدارة المستأجرين", 
-                "العقود", "الدفعات المالية", "التقارير"
-            ])
+            st.write(f"المستخدم: {st.session_state['username']} ({user_role})")
+            
+            # عرض القائمة المفلترة
+            page = st.radio("الذهاب إلى", menu_options)
+            
             if st.button("تسجيل خروج"):
                 st.session_state['logged_in'] = False
                 st.rerun()
         
+        # 2. توجيه المستخدم للصفحة المختارة
         if page == "لوحة التحكم": dashboard()
         elif page == "الأصول والوحدات": manage_assets()
         elif page == "إدارة المستأجرين": 
             st.header("إدارة المستأجرين")
             df = pd.read_sql(session.query(Tenant).statement, session.bind)
             st.dataframe(df, use_container_width=True)
-            if st.session_state['user_role'] == 'Admin':
+            # إضافة المستأجرين متاحة للمدير فقط
+            if user_role == 'Admin':
                 with st.expander("إضافة مستأجر"):
                     with st.form("add_t"):
                         name = st.text_input("الاسم")
@@ -612,9 +731,11 @@ def main():
                             session.add(Tenant(name=name, type=ttype, phone=phone))
                             session.commit()
                             st.rerun()
+        # هذه الصفحات لن تظهر للموظف الآن
         elif page == "العقود": manage_contracts()
         elif page == "الدفعات المالية": manage_payments()
         elif page == "التقارير": reports_page()
+        elif page == "الإعدادات": settings_page()
 
 if __name__ == '__main__':
     main()
