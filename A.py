@@ -272,7 +272,7 @@ def login_page():
                 st.rerun()
             else:
                 st.error("خطأ في البيانات")
-        st.info("حسابات تجريبية: admin/admin123 | emp/emp123")
+
 
 def dashboard():
     st.title("📊 لوحة المؤشرات (الأسبوعي)")
