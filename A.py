@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, Column, Integer, String, Float, Date, ForeignKey, Text
@@ -6,6 +7,7 @@ from datetime import date, datetime
 import hashlib
 import io
 import base64
+import os
 
 # ==========================================
 # 1. إعدادات الصفحة والتهيئة
@@ -65,11 +67,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+
 # ==========================================
 # 2. قاعدة البيانات والنماذج
 # ==========================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "real_estate_v2.db")
 Base = declarative_base()
-engine = create_engine('sqlite:///real_estate_v2.db', connect_args={'check_same_thread': False})
+engine = create_engine(f'sqlite:///{DB_PATH}', connect_args={'check_same_thread': False})
 Session = sessionmaker(bind=engine)
 session = Session()
 
@@ -141,6 +146,8 @@ def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def check_login(username, password):
+    username = username.strip().lower()
+    password = password.strip()
     user = session.query(User).filter_by(username=username).first()
     if user and user.password_hash == hash_password(password):
         return user
@@ -258,11 +265,12 @@ init_seed_data()
 # ==========================================
 
 def login_page():
+
     st.markdown("## 🔐 تسجيل الدخول")
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
-        username = st.text_input("اسم المستخدم")
-        password = st.text_input("كلمة المرور", type="password")
+        username = st.text_input("اسم المستخدم").strip().lower()
+        password = st.text_input("كلمة المرور", type="password").strip()
         if st.button("دخول"):
             user = check_login(username, password)
             if user:
@@ -271,7 +279,7 @@ def login_page():
                 st.session_state['username'] = user.username
                 st.rerun()
             else:
-                st.error("خطأ في البيانات")
+                st.error("حدث خطأ: تأكد من اسم المستخدم وكلمة المرور.")
 
 
 def dashboard():
@@ -673,14 +681,19 @@ def settings_page():
 # 5. التشغيل الرئيسي (main)
 # ==========================================
 def main():
+
+    # Robust session state initialization
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
-    
+    if 'user_role' not in st.session_state:
+        st.session_state['user_role'] = None
+    if 'username' not in st.session_state:
+        st.session_state['username'] = None
+
     if not st.session_state['logged_in']:
         login_page()
     else:
         user_role = st.session_state['user_role']
-        
         # 1. تحديد خيارات القائمة حسب الدور
         if user_role == 'Admin':
             menu_options = [
@@ -693,26 +706,22 @@ def main():
                 "الإعدادات"
             ]
         elif user_role == 'Employee':
-            # تقييد الموظف بالصلاحيات المطلوبة فقط
             menu_options = [
                 "لوحة التحكم", 
                 "الأصول والوحدات", 
                 "إدارة المستأجرين"
             ]
         else:
-             menu_options = ["لوحة التحكم"] # حالة افتراضية
-        
+            menu_options = ["لوحة التحكم"]
+
         with st.sidebar:
             st.title("القائمة الرئيسية")
             st.write(f"المستخدم: {st.session_state['username']} ({user_role})")
-            
-            # عرض القائمة المفلترة
             page = st.radio("الذهاب إلى", menu_options)
-            
             if st.button("تسجيل خروج"):
                 st.session_state['logged_in'] = False
                 st.rerun()
-        
+
         # 2. توجيه المستخدم للصفحة المختارة
         if page == "لوحة التحكم": dashboard()
         elif page == "الأصول والوحدات": manage_assets()
@@ -720,7 +729,6 @@ def main():
             st.header("إدارة المستأجرين")
             df = pd.read_sql(session.query(Tenant).statement, session.bind)
             st.dataframe(df, use_container_width=True)
-            # إضافة المستأجرين متاحة للمدير فقط
             if user_role == 'Admin':
                 with st.expander("إضافة مستأجر"):
                     with st.form("add_t"):
@@ -731,7 +739,6 @@ def main():
                             session.add(Tenant(name=name, type=ttype, phone=phone))
                             session.commit()
                             st.rerun()
-        # هذه الصفحات لن تظهر للموظف الآن
         elif page == "العقود": manage_contracts()
         elif page == "الدفعات المالية": manage_payments()
         elif page == "التقارير": reports_page()
