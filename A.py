@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, Column, Integer, String, Float, Date, ForeignKey, Text
@@ -22,51 +21,92 @@ st.set_page_config(
 # تنسيق الواجهة العربية وتكبير الخط وتحسين الشريط الجانبي
 st.markdown("""
     <style>
-    /* الخط العام */
-    body {direction: rtl; text-align: right;}
-    h1, h2, h3, h4, h5 {text-align: right; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;}
-    .reportview-container .main .block-container {max-width: 95%;}
+    /* ============ تنسيق حقول الإدخال بشكل صحيح ============ */
     
-    /* تكبير حجم الخط في النص العادي والجداول */
-    html, body, .stText, .stMarkdown, .dataframe, .stTable {
-        font-size: 16px; 
-    }
-    
-    /* تكبير المدخلات والأزرار */
-    .stTextInput>div>div>input, .stSelectbox>div>div, .stButton>button {
-        font-size: 16px;
-        padding: 10px;
-    }
-
-    /* *** التعديل الجديد: تحسين الشريط الجانبي بالكامل *** */
-    div[data-testid="stSidebar"] {
-        text-align: right; 
-        font-size: 18px; /* حجم خط إجمالي أكبر */
+    /* لون النص المكتوب داخل Text Input */
+    input[type="text"],
+    input[type="number"],
+    input[type="date"],
+    textarea {
+        background-color: #2a2d3e !important;
+        color: #e5e7eb !important;
+        border: 2px solid #60a5fa !important;
+        border-radius: 6px !important;
+        padding:  12px !important;
+        font-size: 16px !important;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
     }
     
-    /* تكبير خط عنوان القائمة الجانبية */
-    div[data-testid="stSidebar"] .st-emotion-cache-1215bdr h1 {
-        font-size: 24px !important; /* حجم كبير للعنوان "القائمة الرئيسية" */
-    }
-
-    /* تكبير خط بيانات المستخدم */
-    div[data-testid="stSidebar"] .st-emotion-cache-1cypcdb {
-        font-size: 18px !important; /* حجم أكبر لـ "المستخدم: admin (Admin)" */
-        margin-bottom: 15px;
-    }
-
-    /* تكبير الخط والتباعد بين خيارات الصفحات */
-    .stRadio > label {
-        font-size: 18px !important; 
-        padding: 8px 0 !important;
-        margin-bottom: 5px; 
+    /* Placeholder - النص الفاتح عند الحقل الفارغ */
+    input::placeholder,
+    textarea::placeholder {
+        color: #9ca3af !important;
+        opacity: 0.8 !important;
     }
     
-    /* مقاييس الأداء */
-    div[data-testid="stMetricValue"] {text-align: right; font-size: 24px !important;}
+    /* عند التركيز على الحقل */
+    input[type="text"]:focus,
+    input[type="number"]: focus,
+    input[type="date"]:focus,
+    textarea:focus {
+        background-color: #3a3f55 !important;
+        color: #a7f3d0 !important;
+        border-color: #a7f3d0 !important;
+        outline: none !important;
+        box-shadow: 0 0 10px rgba(167, 243, 208, 0.4) !important;
+    }
+    
+    /* Select / Dropdown */
+    select {
+        background-color: #2a2d3e !important;
+        color: #e5e7eb !important;
+        border: 2px solid #60a5fa !important;
+        border-radius: 6px !important;
+        padding: 10px !important;
+        font-size: 16px !important;
+    }
+    
+    select:focus {
+        background-color: #3a3f55 !important;
+        color: #a7f3d0 !important;
+        border-color: #a7f3d0 !important;
+        outline: none !important;
+    }
+    
+    select option {
+        background-color: #2a2d3e;
+        color: #e5e7eb;
+        padding: 8px;
+    }
+    
+    /* Streamlit specific inputs */
+    . stTextInput input {
+        background-color: #2a2d3e !important;
+        color: #e5e7eb !important;
+        border: 2px solid #60a5fa !important;
+    }
+    
+    .stNumberInput input {
+        background-color: #2a2d3e !important;
+        color: #e5e7eb !important;
+        border: 2px solid #60a5fa !important;
+    }
+    
+    . stSelectbox select {
+        background-color: #2a2d3e !important;
+        color: #e5e7eb !important;
+        border: 2px solid #60a5fa !important;
+    }
+    
+    /* Label styling - لون الكلمة فوق الحقل */
+    label {
+        color: #e5e7eb !important;
+        font-weight: 600 !important;
+        font-size: 15px !important;
+    }
+    
     </style>
     """, unsafe_allow_html=True)
-
 
 # ==========================================
 # 2. قاعدة البيانات والنماذج
@@ -104,12 +144,18 @@ class Unit(Base):
     status = Column(String, default="فاضي")
     asset = relationship("Asset")
 
+
 class Tenant(Base):
     __tablename__ = 'tenants'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     type = Column(String)
     phone = Column(String)
+    email = Column(String)
+    national_id = Column(String)
+    address = Column(Text)
+    notes = Column(Text)
+    created_date = Column(Date, default=date.today)
 
 class Contract(Base):
     __tablename__ = 'contracts'
@@ -138,9 +184,25 @@ class Payment(Base):
     contract = relationship("Contract")
 
 Base.metadata.create_all(engine)
+# تحديث جدول المستأجرين إذا لزم الأمر
+try:
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    existing_columns = [col['name'] for col in inspector.get_columns('tenants')]
+    
+    if 'email' not in existing_columns:
+        with engine.connect() as conn:
+            conn.execute('ALTER TABLE tenants ADD COLUMN email VARCHAR')
+            conn.execute('ALTER TABLE tenants ADD COLUMN national_id VARCHAR')
+            conn.execute('ALTER TABLE tenants ADD COLUMN address TEXT')
+            conn.execute('ALTER TABLE tenants ADD COLUMN notes TEXT')
+            conn.execute('ALTER TABLE tenants ADD COLUMN created_date DATE')
+            conn.commit()
+except:
+    pass
 
 # ==========================================
-# 3. دوال مساعدة والبيانات الأولية (Seed Data)
+# 3. دوال مساعدة والبيانات الأولية (Seed Data) - تم توحيدها وتصحيحها
 # ==========================================
 def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
@@ -153,133 +215,259 @@ def check_login(username, password):
         return user
     return None
 
+def generate_units_from_list(asset_obj, unit_list, usage_type="سكني"):
+    """دالة مساعدة لإنشاء الوحدات من قائمة (رقم الشقة، رقم الدور)"""
+    units = []
+    asset_id = asset_obj.id # استخدام الـ ID المأخوذ من قاعدة البيانات
+    
+    for unit_number, floor_num in unit_list:
+        status = "فاضي"
+        # استثناء خاص لعمارة 4 - الدور الأول مؤجر بالكامل
+        # هذا الشرط يعتمد على أن الدور الأول في عمارة 4 مؤجر في البداية
+        if asset_obj.name == "عمارة 4" and floor_num == 1 and unit_number != 0:
+            status = "مؤجر"
+        
+        # استثناء خاص للملحق والمعرض
+        if floor_num == "معرض": # حالة معرض (تم تمريرها كـ (1، "معرض"))
+            u_num = f"معرض {unit_number}"
+            u_floor = "أرضي"
+            usage = "تجاري"
+        elif unit_number == 0: # حالة ملحق (في الإكسل رقم الشقة 0)
+            u_num = "ملحق"
+            u_floor = "سطح"
+            usage = usage_type
+        else: # حالة شقة عادية
+            u_num = str(unit_number)
+            u_floor = str(floor_num)
+            usage = usage_type
+
+        units.append(Unit(
+            asset_id=asset_id, 
+            unit_number=u_num, 
+            floor=u_floor, 
+            usage_type=usage, 
+            status=status
+        ))
+    return units
+
 def init_seed_data():
     """تهيئة البيانات المطلوبة عند التشغيل الأول"""
-    if not session.query(User).first():
-        # 1. المستخدمين
-        admin = User(username="admin", password_hash=hash_password("admin123"), role="Admin")
-        emp = User(username="emp", password_hash=hash_password("emp123"), role="Employee")
-        session.add_all([admin, emp])
+    
+    # تحقق من وجود مستخدمين
+    if session.query(User).first():
+        return # البيانات الأولية موجودة بالفعل، لا تقم بالتهيئة
 
-        # 2. المستأجرين (حسب الطلب)
-        tenants_data = [
-            ("مستشفى الأندلسية", "مستشفى"),
-            ("مستشفى السقاف", "مستشفى"),
-            ("نظارات الصاحب", "شركة"),
-            ("سنابل السلام", "شركة"),
-            ("صيدلية الدواء", "صيدلية"),
-            ("مستثمر محطة الوقود", "مستثمر")
-        ]
-        for t_name, t_type in tenants_data:
-            session.add(Tenant(name=t_name, type=t_type))
-        session.commit()
+    # 1. المستخدمين (Admin و Employee)
+    admin = User(username="admin", password_hash=hash_password("admin123"), role="Admin")
+    emp = User(username="emp", password_hash=hash_password("emp123"), role="Employee")
+    session.add_all([admin, emp])
+    session.commit() # حفظ المستخدمين لضمان تسجيلهم
 
-        # 3. الأصول (العمارات، الأراضي، المستودعات)
-        assets_list = []
-        
-        # العمارات
-        b1 = Asset(name="عمارة 1", type="عمارة", description="5 أدوار – ميزانين – ملحق – معارض")
-        b2 = Asset(name="عمارة 2", type="عمارة", description="5 أدوار + ملحق")
-        b3 = Asset(name="عمارة 3", type="عمارة", description="3 أدوار – 6 شقق لكل دور + ملحق (تسلسل 311-336)")
-        b4 = Asset(name="عمارة 4", type="عمارة", description="3 أدوار – الدور الأول مؤجر بالكامل (تسلسل 401-436)")
-        
-        # المستودعات
-        w1 = Asset(name="مستودع 1", type="مستودع", description="تجاري / مؤجر")
-        w2 = Asset(name="مستودع 2", type="مستودع", description="تجاري / مؤجر")
-        
-        # الأراضي والمحطات
-        l1 = Asset(name="أرض شارع حراء (محطة)", type="محطة وقود", location="شارع حراء", description="2500م – محطة")
-        l2 = Asset(name="أرض الميزانين", type="أرض", description="1500م – حق انتفاع")
-        l3 = Asset(name="أرض كيلو 14", type="أرض", location="كيلو 14", description="12000م – غير مستغلة")
-        
-        assets_list.extend([b1, b2, b3, b4, w1, w2, l1, l2, l3])
-        session.add_all(assets_list)
-        session.commit()
+    # 2. المستأجرين
+    tenants_data = [
+        ("مستشفى الأندلسية", "مستشفى"),
+        ("مستشفى السقاف", "مستشفى"),
+        ("نظارات الصاحب", "شركة"),
+        ("سنابل السلام", "شركة"),
+        ("صيدلية الدواء", "صيدلية"),
+        ("مستثمر محطة الوقود", "مستثمر")
+    ]
+    for t_name, t_type in tenants_data:
+        session.add(Tenant(name=t_name, type=t_type))
+    session.commit()
 
-        # 4. الوحدات (Units Generation)
-        units_list = []
+    # 3. الأصول
+    assets_map = {
+        "عمارة 1": Asset(name="عمارة 1", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل"),
+        "عمارة 2": Asset(name="عمارة 2", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل"),
+        "عمارة 3": Asset(name="عمارة 3", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل"),
+        "عمارة 4": Asset(name="عمارة 4", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل (الدور الأول مؤجر بالكامل)"),
+        "مستودع 1": Asset(name="مستودع 1", type="مستودع", description="تجاري / مؤجر"),
+        "مستودع 2": Asset(name="مستودع 2", type="مستودع", description="تجاري / مؤجر"),
+        "أرض شارع حراء (محطة)": Asset(name="أرض شارع حراء (محطة)", type="محطة وقود", location="شارع حراء", description="2500م – محطة"),
+        "أرض الميزان": Asset(name="أرض الميزان", type="أرض", description="1500م – حق انتفاع"),
+        "أرض كيلو 14": Asset(name="أرض كيلو 14", type="أرض", location="كيلو 14", description="12000م – غير مستغلة")
+    }
+    
+    session.add_all(assets_map.values())
+    session.commit()
+    
+    # جلب الأصول مع IDs الصحيحة
+    b1 = session.query(Asset).filter_by(name="عمارة 1").first()
+    b2 = session.query(Asset).filter_by(name="عمارة 2").first()
+    b3 = session.query(Asset).filter_by(name="عمارة 3").first()
+    b4 = session.query(Asset).filter_by(name="عمارة 4").first()
+    w1 = session.query(Asset).filter_by(name="مستودع 1").first()
+    w2 = session.query(Asset).filter_by(name="مستودع 2").first()
+    l1 = session.query(Asset).filter_by(name="أرض شارع حراء (محطة)").first()
+    l2 = session.query(Asset).filter_by(name="أرض الميزان").first()
+    l3 = session.query(Asset).filter_by(name="أرض كيلو 14").first()
+    
+    # 4. الوحدات (Units Generation) - بناءً على صور الإكسل
+    units_list = []
+    
+    # --- عمارة 1 (ID=b1.id) ---
+    b1_units_data = [
+        (111, 1), (112, 1), (113, 1), (114, 1), (115, 1), (116, 1),
+        (121, 2), (122, 2), (123, 2), (124, 2), (125, 2), (126, 2),
+        (131, 3), (132, 3), (133, 3), (134, 3), (135, 3), (136, 3),
+        (141, 4), (112, 4), (113, 4), (114, 4), (115, 4), (116, 4),
+        (121, 5), (122, 5), (123, 5), (124, 5), (125, 5), (126, 5),
+        (131, 6), (132, 6), (133, 6), (134, 6), (135, 6), (136, 6),
+        (0, 0), # ملحق
+        (1, "معرض") # معرض 1
+    ]
+    units_list.extend(generate_units_from_list(b1, b1_units_data))
 
-        # --- عمارة 1 (5 أدوار، ميزانين، معارض، ملحق) ---
-        # معارض
-        for i in range(1, 4):
-            units_list.append(Unit(asset_id=b1.id, unit_number=f"100-{i} (معرض)", floor="أرضي", usage_type="تجاري"))
-        # ميزانين
-        units_list.append(Unit(asset_id=b1.id, unit_number="100-ميزانين", floor="ميزانين", usage_type="تجاري"))
-        # شقق (الدور 1 إلى 5) - نفترض شقتين في الدور
-        for f in range(1, 6):
-            units_list.append(Unit(asset_id=b1.id, unit_number=f"10{f}A", floor=str(f), usage_type="سكني"))
-            units_list.append(Unit(asset_id=b1.id, unit_number=f"10{f}B", floor=str(f), usage_type="سكني"))
-        # ملحق
-        units_list.append(Unit(asset_id=b1.id, unit_number="10-ملحق", floor="سطح", usage_type="سكن عمال"))
+    # --- عمارة 2 (ID=b2.id) ---
+    b2_units_data = [
+        (211, 1), (212, 1), (213, 1), (214, 1), (215, 1), (216, 1),
+        (221, 2), (222, 2), (223, 2), (224, 2), (225, 2), (226, 2),
+        (231, 3), (232, 3), (233, 3), (234, 3), (235, 3), (236, 3),
+        (241, 4), (242, 4), (243, 4), (245, 4), (116, 4), 
+        (251, 5), (252, 5), (253, 5), (254, 5), (255, 5), (256, 5),
+        (261, 6), (262, 6), (263, 6), (264, 6), (265, 6), (266, 6),
+        (0, 0), # ملحق
+        (1, "معرض") # معرض 1
+    ]
+    units_list.extend(generate_units_from_list(b2, b2_units_data))
 
-        # --- عمارة 2 (5 أدوار + ملحق) ---
-        # معارض (كما في الصورة)
-        for i in range(1, 4):
-            units_list.append(Unit(asset_id=b2.id, unit_number=f"200-{i} (معرض)", floor="أرضي", usage_type="تجاري"))
-        # شقق (الدور 1 إلى 5)
-        for f in range(1, 6):
-            units_list.append(Unit(asset_id=b2.id, unit_number=f"20{f}-1", floor=str(f), usage_type="سكني"))
-            units_list.append(Unit(asset_id=b2.id, unit_number=f"20{f}-2", floor=str(f), usage_type="سكني"))
-        units_list.append(Unit(asset_id=b2.id, unit_number="20-ملحق", floor="سطح", usage_type="سكني"))
+    # --- عمارة 3 (ID=b3.id) ---
+    b3_units_data = [
+        (311, 1), (312, 1), (313, 1), (314, 1), (315, 1), (316, 1),
+        (321, 2), (322, 2), (323, 2), (324, 2), (325, 2), (326, 2),
+        (331, 3), (332, 3), (333, 3), (334, 3), (335, 3), (336, 3),
+        (0, 0), # ملحق
+    ]
+    units_list.extend(generate_units_from_list(b3, b3_units_data))
 
-        # --- عمارة 3 (3 أدوار - 6 شقق لكل دور + ملحق) ---
-        # شقق 311 -> 336
-        counter = 311
-        for f in range(1, 4):
-            for _ in range(8): # 8 شقق بالدور لتغطية 24 شقة (336-311=25)
-                if counter <= 336:
-                    units_list.append(Unit(asset_id=b3.id, unit_number=str(counter), floor=str(f), usage_type="سكني"))
-                    counter += 1
-                else: break
-        units_list.append(Unit(asset_id=b3.id, unit_number="30-ملحق", floor="سطح", usage_type="سكني"))
-
-        # --- عمارة 4 (3 أدوار - الدور الأول مؤجر بالكامل) ---
-        # شقق 401 -> 436 (تقريباً 12 شقة في كل دور)
-        counter_4 = 401
-        for f in range(1, 4):
-            status = "مؤجر" if f == 1 else "فاضي" 
-            
-            # إنشاء 12 شقة لكل دور (لتغطية 36 رقم)
-            for _ in range(12): 
-                if counter_4 <= 436:
-                    units_list.append(Unit(asset_id=b4.id, unit_number=str(counter_4), floor=str(f), usage_type="سكني", status=status))
-                    counter_4 += 1
-                else: break
-        
-        # لتغطية الوصف "الدور الأول مؤجر بالكامل" لوحدة واحدة
-        units_list.append(Unit(asset_id=b4.id, unit_number="40-الدور الأول (إجمالي)", floor="1", usage_type="تجاري/سكني", status="مؤجر"))
+    # --- عمارة 4 (ID=b4.id) ---
+    b4_units_data = [
+        (411, 1), (412, 1), (413, 1), (414, 1), (415, 1), (416, 1),
+        (421, 2), (422, 2), (423, 2), (424, 2), (425, 2), (426, 2),
+        (431, 3), (432, 3), (433, 3), (434, 3), (435, 3), (436, 3),
+        (0, 0), # ملحق
+    ]
+    units_list.extend(generate_units_from_list(b4, b4_units_data))
 
 
-        # --- المستودعات والأراضي ---
-        units_list.append(Unit(asset_id=w1.id, unit_number="مستودع رئيسي 1", usage_type="تجاري", status="مؤجر"))
-        units_list.append(Unit(asset_id=w2.id, unit_number="مستودع رئيسي 2", usage_type="تجاري", status="مؤجر"))
-        units_list.append(Unit(asset_id=l1.id, unit_number="أرض المحطة", area=2500, usage_type="تجاري"))
-        units_list.append(Unit(asset_id=l2.id, unit_number="أرض حق انتفاع", area=1500, usage_type="حق انتفاع"))
+    # --- الأصول الأخرى (الحالة مؤجر كما طلب) ---
+    # مؤجر: مستودع 1, مستودع 2, أرض المحطة, أرض الميزان
+    units_list.append(Unit(asset_id=w1.id, unit_number="مستودع 1", usage_type="تجاري", status="مؤجر"))
+    units_list.append(Unit(asset_id=w2.id, unit_number="مستودع 2", usage_type="تجاري", status="مؤجر"))
+    units_list.append(Unit(asset_id=l1.id, unit_number="أرض المحطة", area=2500, usage_type="تجاري", status="مؤجر"))
+    units_list.append(Unit(asset_id=l2.id, unit_number="أرض الميزان (حق انتفاع)", area=1500, usage_type="حق انتفاع", status="مؤجر"))
+    
+    # فاضي: أرض كيلو 14
+    units_list.append(Unit(asset_id=l3.id, unit_number="أرض كيلو 14", area=12000, usage_type="أرض", status="فاضي"))
 
-        session.add_all(units_list)
-        session.commit()
-
+    session.add_all(units_list)
+    session.commit()
+    
+# تشغيل دالة البيانات الأولية لإنشاء الجداول والمستخدمين والوحدات عند بدء التشغيل
 init_seed_data()
+
+
 # ==========================================
 # 4. مكونات الواجهة
 # ==========================================
 
 def login_page():
-
-    st.markdown("## 🔐 تسجيل الدخول")
-    col1, col2, col3 = st.columns([1,2,1])
+    # إضافة مسافة فارغة في الأعلى
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    
+    # إنشاء 3 أعمدة للتوسيط
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
-        username = st.text_input("اسم المستخدم").strip().lower()
-        password = st.text_input("كلمة المرور", type="password").strip()
-        if st.button("دخول"):
-            user = check_login(username, password)
-            if user:
-                st.session_state['logged_in'] = True
-                st.session_state['user_role'] = user.role
-                st.session_state['username'] = user.username
-                st.rerun()
-            else:
-                st.error("حدث خطأ: تأكد من اسم المستخدم وكلمة المرور.")
+        # عرض الشعار (إذا كان موجود في نفس المجلد)
+        # يمكنك وضع ملف الصورة في نفس مجلد المشروع باسم "logo.png"
+        try:
+            st.image("logo.png", use_container_width=True)
+        except:
+            # إذا لم يكن الشعار موجود، عرض اسم الجمعية فقط
+            st.markdown("""
+                <div style="text-align: center; padding: 20px;">
+                    <h1 style="color: #6B9B7A; font-size: 48px; margin-bottom: 0;">زواج</h1>
+                    <p style="color: #E07A7A; font-size: 20px; margin-top: 10px;">
+                        الجمعية الخيرية لمساعدة الشباب<br>
+                        على الزواج والتوجيه الأسري بجدة
+                    </p>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # بطاقة تسجيل الدخول
+        st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 3px;
+                border-radius: 15px;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            ">
+                <div style="
+                    background: #1E1E1E;
+                    padding: 30px;
+                    border-radius: 13px;
+                    text-align: center;
+                ">
+                    <h2 style="color: #FFFFFF; margin-bottom: 10px;">🔐 تسجيل الدخول</h2>
+                    <p style="color: #B0B0B0; font-size: 14px;">نظام إدارة الأصول العقارية</p>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # حقول الإدخال
+        with st.container():
+            username = st.text_input(
+                "👤 اسم المستخدم",
+                placeholder="أدخل اسم المستخدم",
+                key="login_username"
+            ).strip().lower()
+            
+            password = st.text_input(
+                "🔒 كلمة المرور",
+                type="password",
+                placeholder="أدخل كلمة المرور",
+                key="login_password"
+            ).strip()
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # زر الدخول بتصميم مميز
+            if st.button("🚀 دخول", use_container_width=True, type="primary"):
+                if not username or not password:
+                    st.error("⚠️ الرجاء إدخال اسم المستخدم وكلمة المرور")
+                else:
+                    user = check_login(username, password)
+                    if user:
+                        st.session_state['logged_in'] = True
+                        st.session_state['user_role'] = user.role
+                        st.session_state['username'] = user.username
+                        st.success("✅ تم تسجيل الدخول بنجاح!")
+                        st.rerun()
+                    else:
+                        st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
+        
+        # معلومات إضافية في الأسفل
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("""
+            <div style="text-align: center; color: #808080; font-size: 12px; padding: 20px;">
+                <p>💡 <strong>حسابات تجريبية:</strong></p>
+                <p style="margin: 5px 0;">
+                    <span style="color: #60A5FA;">المدير:</span> admin / admin123<br>
+                    <span style="color: #34D399;">الموظف:</span> emp / emp123
+                </p>
+                <hr style="border: 1px solid #333; margin: 20px 0;">
+                <p>
+                    جميع الحقوق محفوظة © 2024<br>
+                    <strong style="color: #6B9B7A;">جمعية زواج الخيرية</strong>
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
 
 
 def dashboard():
@@ -338,53 +526,300 @@ def dashboard():
         st.info("لا توجد دفعات متأخرة حالياً لعرض هذا التقرير.")
 
 def manage_assets():
-    st.header("🏢 الأصول والوحدات")
-    assets = pd.read_sql(session.query(Asset).statement, session.bind)
-    st.dataframe(assets[['name', 'type', 'description']], use_container_width=True)
+    st.header("🏢 إدارة الأصول والوحدات")
     
-    # --- إضافة واجهة إضافة وحدات جديدة (للمدير فقط) ---
-    if st.session_state['user_role'] == 'Admin':
-        st.subheader("➕ إضافة وحدة جديدة")
-        with st.form("add_new_unit"):
-            c1, c2, c3 = st.columns(3)
-            asset_opts = {a.name: a.id for a in session.query(Asset).all()}
-            selected_asset_name = c1.selectbox("اختر الأصل", list(asset_opts.keys()))
-            
-            unit_num = c2.text_input("رقم/اسم الوحدة")
-            usage = c3.selectbox("نوع الاستخدام", ["سكني", "تجاري", "حق انتفاع", "سكن عمال"])
-            
-            c4, c5 = st.columns(2)
-            floor = c4.text_input("الدور (مثال: أرضي، 1، ميزانين)")
-            area = c5.number_input("المساحة (متر مربع - اختياري)", min_value=0.0, value=0.0)
-            
-            submitted = st.form_submit_button("حفظ الوحدة")
-            
-            if submitted:
-                asset_id = asset_opts[selected_asset_name]
-                new_unit = Unit(
-                    asset_id=asset_id,
-                    unit_number=unit_num,
-                    usage_type=usage,
-                    floor=floor,
-                    area=area if area > 0 else None,
-                    status="فاضي"
-                )
-                session.add(new_unit)
-                session.commit()
-                st.success(f"تم إضافة الوحدة **{unit_num}** للأصل **{selected_asset_name}** بنجاح.")
-                st.rerun()
+    # تحميل الأصول
+    assets = pd.read_sql(session.query(Asset).statement, session.bind)
+    
+    if assets.empty:
+        st.info("لا توجد أصول مُضافة بعد.")
+        return
+    
+    # عرض ملخص سريع للأصول
+    st.subheader("📊 ملخص الأصول")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("إجمالي الأصول", len(assets))
+    with col2:
+        total_units = session.query(Unit).count()
+        st.metric("إجمالي الوحدات", total_units)
+    with col3:
+        rented_units = session.query(Unit).filter(Unit.status == "مؤجر").count()
+        st.metric("الوحدات المؤجرة", rented_units)
     
     st.markdown("---")
     
-    st.subheader("تفاصيل الوحدات")
-    if not assets.empty:
-        selected_asset = st.selectbox("اختر الأصل لعرض وحداته", assets['name'].unique())
-        asset_id = assets[assets['name'] == selected_asset]['id'].values[0]
+    # عرض الأصول في جدول
+    with st.expander("📋 عرض جميع الأصول", expanded=False):
+        st.dataframe(
+            assets[['name', 'type', 'description']], 
+            use_container_width=True,
+            hide_index=True
+        )
+    
+    st.markdown("---")
+    
+    # =========================================================================
+    # قسم الإدارة (للمسؤولين فقط)
+    # =========================================================================
+    if st.session_state['user_role'] == 'Admin':
+        st.subheader("⚙️ إدارة الوحدات")
         
-        units = pd.read_sql(session.query(Unit).filter_by(asset_id=asset_id).statement, session.bind)
-        st.dataframe(units[['unit_number', 'floor', 'usage_type', 'status', 'area']], use_container_width=True)
+        # Tabs لتقسيم الوظائف
+        tab1, tab2 = st.tabs(["✏️ تعديل وحدة موجودة", "➕ إضافة وحدة جديدة"])
+        
+        # ===================================================================
+        # Tab 1: تعديل وحدة موجودة
+        # ===================================================================
+        with tab1:
+            st.markdown("#### تعديل بيانات أو حالة وحدة")
+            
+            # اختيار الأصل
+            asset_list = session.query(Asset).all()
+            asset_names = [a.name for a in asset_list]
+            
+            if asset_names:
+                selected_asset_name = st.selectbox(
+                    "🏢 اختر الأصل",
+                    asset_names,
+                    key='edit_asset_select'
+                )
+                
+                # العثور على الأصل المختار
+                selected_asset = None
+                for a in asset_list:
+                    if a.name == selected_asset_name:
+                        selected_asset = a
+                        break
+                
+                if selected_asset:
+                    # جلب جميع الوحدات للأصل المحدد
+                    all_units = session.query(Unit).filter(
+                        Unit.asset_id == selected_asset.id
+                    ).all()
+                    
+                    if all_units:
+                        with st.form("edit_unit_form", clear_on_submit=False):
+                            # إنشاء قائمة الوحدات
+                            unit_labels = []
+                            unit_ids = []
+                            for u in all_units:
+                                label = f"وحدة {u.unit_number} - الدور {u.floor or 'غير محدد'} ({u.usage_type}) - {u.status}"
+                                unit_labels.append(label)
+                                unit_ids.append(u.id)
+                            
+                            selected_unit_label = st.selectbox(
+                                "🔑 اختر الوحدة المراد تعديلها",
+                                unit_labels,
+                                key='edit_unit_select'
+                            )
+                            
+                            # العثور على الوحدة المختارة
+                            selected_index = unit_labels.index(selected_unit_label)
+                            selected_unit_id = unit_ids[selected_index]
+                            unit_to_update = session.query(Unit).get(selected_unit_id)
+                            
+                            if unit_to_update:
+                                st.markdown("---")
+                                st.markdown("##### 📝 البيانات الأساسية")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    new_floor = st.text_input(
+                                        "الدور",
+                                        value=unit_to_update.floor if unit_to_update.floor else "",
+                                        placeholder="مثال: 1، 2، أرضي"
+                                    )
+                                    new_usage = st.selectbox(
+                                        "نوع الاستخدام",
+                                        ["سكني", "تجاري", "حق انتفاع", "سكن عمال"],
+                                        index=["سكني", "تجاري", "حق انتفاع", "سكن عمال"].index(unit_to_update.usage_type)
+                                    )
+                                
+                                with col2:
+                                    new_area = st.number_input(
+                                        "المساحة (م²)",
+                                        min_value=0.0,
+                                        value=float(unit_to_update.area) if unit_to_update.area else 0.0,
+                                        step=0.5
+                                    )
+                                    new_status = st.selectbox(
+                                        "حالة الوحدة",
+                                        ["فاضي", "مؤجر", "تحت الصيانة"],
+                                        index=["فاضي", "مؤجر", "تحت الصيانة"].index(unit_to_update.status)
+                                    )
+                                
+                                st.markdown("---")
+                                
+                                submit_edit = st.form_submit_button(
+                                    "💾 حفظ التعديلات",
+                                    use_container_width=True,
+                                    type="primary"
+                                )
+                                
+                                if submit_edit:
+                                    unit_to_update.floor = new_floor if new_floor else None
+                                    unit_to_update.area = new_area if new_area > 0 else None
+                                    unit_to_update.usage_type = new_usage
+                                    unit_to_update.status = new_status
+                                    session.commit()
+                                    st.success(f"✅ تم تحديث الوحدة **{unit_to_update.unit_number}** بنجاح!")
+                                    st.rerun()
+                    else:
+                        st.info("ℹ️ لا توجد وحدات في هذا الأصل حالياً. يمكنك إضافة وحدات جديدة من تبويب 'إضافة وحدة جديدة'.")
+        
+        # ===================================================================
+        # Tab 2: إضافة وحدة جديدة
+        # ===================================================================
+        with tab2:
+            st.markdown("#### إضافة وحدة جديدة للأصل")
+            
+            with st.form("add_unit_form", clear_on_submit=True):
+                # اختيار الأصل
+                asset_list_add = session.query(Asset).all()
+                asset_names_add = [a.name for a in asset_list_add]
+                
+                selected_asset_add = st.selectbox(
+                    "🏢 اختر الأصل",
+                    asset_names_add,
+                    key='add_asset_select'
+                )
+                
+                st.markdown("---")
+                st.markdown("##### 📝 بيانات الوحدة الجديدة")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    unit_num_new = st.text_input(
+                        "رقم/اسم الوحدة *",
+                        placeholder="مثال: 101، A1"
+                    )
+                with col2:
+                    floor_new = st.text_input(
+                        "الدور",
+                        placeholder="مثال: 1، أرضي"
+                    )
+                with col3:
+                    usage_new = st.selectbox(
+                        "نوع الاستخدام",
+                        ["سكني", "تجاري", "حق انتفاع", "سكن عمال"],
+                        key='usage_new'
+                    )
+                
+                area_new = st.number_input(
+                    "المساحة (م²) - اختياري",
+                    min_value=0.0,
+                    value=0.0,
+                    step=0.5,
+                    key='area_new'
+                )
+                
+                st.markdown("---")
+                
+                submit_add = st.form_submit_button(
+                    "✅ إضافة الوحدة",
+                    use_container_width=True,
+                    type="primary"
+                )
+                
+                if submit_add:
+                    if not unit_num_new.strip():
+                        st.error("⚠️ الرجاء إدخال رقم/اسم الوحدة")
+                    else:
+                        # العثور على الأصل المختار
+                        selected_asset_obj = None
+                        for a in asset_list_add:
+                            if a.name == selected_asset_add:
+                                selected_asset_obj = a
+                                break
+                        
+                        if selected_asset_obj:
+                            # التحقق من عدم التكرار
+                            existing = session.query(Unit).filter(
+                                Unit.asset_id == selected_asset_obj.id,
+                                Unit.unit_number == unit_num_new.strip()
+                            ).first()
+                            
+                            if existing:
+                                st.error(f"⚠️ رقم الوحدة '{unit_num_new}' موجود بالفعل في هذا الأصل")
+                            else:
+                                new_unit = Unit(
+                                    asset_id=selected_asset_obj.id,
+                                    unit_number=unit_num_new.strip(),
+                                    usage_type=usage_new,
+                                    floor=floor_new.strip() if floor_new else None,
+                                    area=area_new if area_new > 0 else None,
+                                    status="فاضي"
+                                )
+                                session.add(new_unit)
+                                session.commit()
+                                st.success(f"✅ تم إضافة الوحدة **{unit_num_new}** بنجاح!")
+                                st.rerun()
+    
+    # =========================================================================
+    # قسم عرض تفاصيل الوحدات (للجميع)
+    # =========================================================================
+    st.markdown("---")
+    st.subheader("🔍 عرض تفاصيل الوحدات")
+    
+    # قائمة الأصول
+    view_asset_names = assets['name'].tolist()
+    
+    if view_asset_names:
+        selected_view_asset = st.selectbox(
+            "اختر الأصل لعرض وحداته",
+            view_asset_names,
+            key='view_asset_select'
+        )
+        
+        # العثور على الأصل
+        view_asset_id = assets[assets['name'] == selected_view_asset]['id'].values[0]
+        
+        # جلب الوحدات
+        view_units = session.query(Unit).filter(Unit.asset_id == view_asset_id).all()
+        
+        if view_units:
+            # عرض إحصائيات سريعة
+            vacant = sum(1 for u in view_units if u.status == 'فاضي')
+            rented = sum(1 for u in view_units if u.status == 'مؤجر')
+            maintenance = sum(1 for u in view_units if u.status == 'تحت الصيانة')
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("🟢 فارغة", vacant)
+            with col2:
+                st.metric("🔴 مؤجرة", rented)
+            with col3:
+                st.metric("🟡 صيانة", maintenance)
+            
+            # إنشاء DataFrame للعرض
+            units_display_data = []
+            for u in view_units:
+                status_icon = {
+                    "فاضي": "🟢",
+                    "مؤجر": "🔴",
+                    "تحت الصيانة": "🟡"
+                }.get(u.status, "⚪")
+                
+                units_display_data.append({
+                    'رقم الوحدة': u.unit_number,
+                    'الدور': u.floor if u.floor else '-',
+                    'النوع': u.usage_type,
+                    'الحالة': f"{status_icon} {u.status}",
+                    'المساحة (م²)': u.area if u.area else '-'
+                })
+            
+            units_df = pd.DataFrame(units_display_data)
+            
+            st.dataframe(
+                units_df,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("لا توجد وحدات مضافة لهذا الأصل بعد.")
     else:
-         st.info("لا توجد أصول مُضافة بعد.")
+        st.info("لا توجد أصول لعرض وحداتها.")
 
 def manage_contracts():
     st.header("📄 إدارة العقود")
@@ -395,8 +830,19 @@ def manage_contracts():
                 t_dict = {t.name: t.id for t in tenants}
                 
                 # وحدات غير مؤجرة
-                free_units = session.query(Unit).filter_by(status='فاضي').all()
-                u_options = {f"{u.unit_number} ({u.asset.name})": u.id for u in free_units}
+                # تضمين الوحدات التي حالتها "مؤجر" لكن ليس لديها عقد بعد (لحل مشكلة التوليد الأولي)
+                all_units = session.query(Unit).all()
+                u_options = {}
+                for u in all_units:
+                    # التحقق إذا كانت الوحدة مؤجرة ولها عقد بالفعل
+                    # (هذا التحقق ليس مثالياً لأنه لا يمنع ربط نفس الوحدة بعقدين إذا تم إضافة العقد يدوياً لاحقاً)
+                    contract_exists = session.query(Contract).filter(
+                        Contract.linked_units_ids.like(f"%{u.id}%")
+                    ).first()
+                    
+                    if u.status == 'فاضي' or (u.status == 'مؤجر' and not contract_exists):
+                         u_options[f"{u.unit_number} ({u.asset.name})"] = u.id
+
                 
                 c1, c2 = st.columns(2)
                 t_name = c1.selectbox("المستأجر", list(t_dict.keys()))
@@ -422,7 +868,7 @@ def manage_contracts():
                     )
                     session.add(new_c)
                     
-                    # تحديث الوحدات
+                    # تحديث حالة الوحدات إلى مؤجر
                     for u_label in sel_units:
                         uid = u_options[u_label]
                         u_obj = session.query(Unit).get(uid)
@@ -449,6 +895,10 @@ def manage_payments():
     contracts = session.query(Contract).all()
     c_opts = {f"عقد #{c.id} - {c.tenant.name}": c for c in contracts}
     
+    if not c_opts:
+        st.warning("لا توجد عقود مضافة لتوليد دفعات.")
+        return
+
     sel_c_label = st.selectbox("اختر العقد", list(c_opts.keys()))
     if sel_c_label:
         contract = c_opts[sel_c_label]
@@ -472,31 +922,40 @@ def manage_payments():
                 amount_per_pay = contract.rent_amount / (12/step)
                 
                 curr = contract.start_date
+                
+                # توليد الدفعات
+                payments_to_add = []
                 while curr < contract.end_date:
-                    # تطبيق الشرط الخاص بالمحطة
+                    
                     beneficiary = "الجمعية"
                     if is_gas_station:
-                        cutoff = date(curr.year, 8, 1) # الأول من أغسطس
-                        # نفترض السنة الحالية أو سنة العقد، هنا نقارن الشهر واليوم بشكل مبسط
-                        # إذا كان التاريخ الحالي للدفع >= 1/8 في أي سنة
-                        if (curr.month > 8) or (curr.month == 8 and curr.day >= 1):
+                        # إذا كان تاريخ الاستحقاق يقع في أو بعد أغسطس (8)
+                        if (curr.month >= 8):
                             beneficiary = "المستثمر"
                     
                     vat_val = amount_per_pay * contract.vat_rate
                     
-                    p = Payment(
+                    payments_to_add.append(Payment(
                         contract_id=contract.id, due_date=curr, amount=amount_per_pay,
                         vat=vat_val, total=amount_per_pay + vat_val,
                         status="مستحق", beneficiary=beneficiary
-                    )
-                    session.add(p)
+                    ))
                     
                     # زيادة التاريخ
                     new_month = curr.month + step
                     new_year = curr.year + (new_month - 1) // 12
                     new_month = (new_month - 1) % 12 + 1
-                    curr = date(new_year, new_month, min(curr.day, 28))
+                    # للحفاظ على اليوم قدر الإمكان مع تجنب الأيام غير الموجودة في الشهر الجديد
+                    day_to_use = min(curr.day, 28) 
+                    
+                    # إذا تجاوز التاريخ نهاية العقد، توقف
+                    next_date = date(new_year, new_month, day_to_use)
+                    if next_date > contract.end_date:
+                        break
+                        
+                    curr = next_date
                 
+                session.add_all(payments_to_add)
                 session.commit()
                 st.success("تم توليد الدفعات حسب القواعد")
                 st.rerun()
@@ -655,7 +1114,9 @@ def settings_page():
                             errors.append("اسم المستخدم هذا محجوز مسبقاً.")
                         else:
                             user_to_edit.username = new_username
-                            st.session_state['username'] = new_username # تحديث الحالة الجلسة إذا كان هو المستخدم الحالي
+                            # تحديث الحالة الجلسة إذا كان هو المستخدم الحالي
+                            if st.session_state['username'] == user_to_edit_name:
+                                st.session_state['username'] = new_username 
 
                     # 2. تحديث كلمة المرور
                     if new_password:
@@ -670,79 +1131,390 @@ def settings_page():
                     else:
                         session.commit()
                         st.success("تم تحديث الإعدادات بنجاح. يرجى تسجيل الخروج والدخول مرة أخرى للتحقق من التغييرات.")
-                        if new_username != user_to_edit_name:
-                             st.info("سيتم تسجيل خروجك لإكمال التحديث.")
                         st.rerun()
-
     else:
-        st.warning("ليس لديك صلاحية الوصول إلى هذه الإعدادات.")
+         st.warning("هذه الصفحة متاحة للمدير فقط.")
 
+
+
+def manage_tenants():
+    st.header("👥 إدارة المستأجرين")
+    
+    # عرض ملخص سريع
+    st.subheader("📊 ملخص المستأجرين")
+    total_tenants = session.query(Tenant).count()
+    active_contracts = session.query(Contract).filter(Contract.end_date >= date.today()).count()
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("إجمالي المستأجرين", total_tenants)
+    with col2:
+        st.metric("العقود النشطة", active_contracts)
+    with col3:
+        # حساب المستأجرين بدون عقود
+        tenants_with_contracts = session.query(Contract.tenant_id).distinct().count()
+        st.metric("مستأجرين بدون عقود", total_tenants - tenants_with_contracts)
+    
+    st.markdown("---")
+    
+    # =========================================================================
+    # قسم الإدارة (للمسؤولين فقط)
+    # =========================================================================
+    if st.session_state['user_role'] == 'Admin':
+        st.subheader("⚙️ إدارة بيانات المستأجرين")
+        
+        tab1, tab2 = st.tabs(["✏️ تعديل/عرض مستأجر", "➕ إضافة مستأجر جديد"])
+        
+        # ===================================================================
+        # Tab 1: تعديل/عرض مستأجر موجود
+        # ===================================================================
+        with tab1:
+            st.markdown("#### تعديل أو عرض بيانات مستأجر")
+            
+            tenants_list = session.query(Tenant).all()
+            
+            if tenants_list:
+                tenant_names = [f"{t.name} - {t.type or 'غير محدد'}" for t in tenants_list]
+                
+                selected_tenant_label = st.selectbox(
+                    "🔍 اختر المستأجر",
+                    tenant_names,
+                    key='select_tenant_edit'
+                )
+                
+                # العثور على المستأجر المختار
+                selected_index = tenant_names.index(selected_tenant_label)
+                selected_tenant = tenants_list[selected_index]
+                
+                # عرض بيانات المستأجر الحالية في expander
+                with st.expander("📄 البيانات الحالية", expanded=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**الاسم:** {selected_tenant.name}")
+                        st.write(f"**النوع:** {selected_tenant.type or '-'}")
+                        st.write(f"**الهاتف:** {selected_tenant.phone or '-'}")
+                        st.write(f"**البريد الإلكتروني:** {selected_tenant.email or '-'}")
+                    with col2:
+                        st.write(f"**رقم الهوية:** {selected_tenant.national_id or '-'}")
+                        st.write(f"**العنوان:** {selected_tenant.address or '-'}")
+                        st.write(f"**تاريخ الإضافة:** {selected_tenant.created_date or '-'}")
+                    
+                    if selected_tenant.notes:
+                        st.write(f"**ملاحظات:** {selected_tenant.notes}")
+                
+                # عرض العقود المرتبطة
+                tenant_contracts = session.query(Contract).filter_by(tenant_id=selected_tenant.id).all()
+                if tenant_contracts:
+                    st.markdown("##### 📑 العقود المرتبطة")
+                    contracts_data = []
+                    for c in tenant_contracts:
+                        # جلب أسماء الوحدات
+                        unit_names = []
+                        if c.linked_units_ids:
+                            for uid in c.linked_units_ids.split(','):
+                                u = session.query(Unit).get(int(uid))
+                                if u:
+                                    unit_names.append(f"{u.unit_number} ({u.asset.name})")
+                        
+                        contracts_data.append({
+                            'رقم العقد': c.id,
+                            'النوع': c.contract_type,
+                            'القيمة السنوية': f"{c.rent_amount:,.0f}",
+                            'الوحدات': ', '.join(unit_names) if unit_names else '-',
+                            'تاريخ البداية': c.start_date,
+                            'تاريخ النهاية': c.end_date
+                        })
+                    
+                    contracts_df = pd.DataFrame(contracts_data)
+                    st.dataframe(contracts_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("لا توجد عقود مرتبطة بهذا المستأجر")
+                
+                st.markdown("---")
+                
+                # نموذج التعديل
+                with st.form("edit_tenant_form"):
+                    st.markdown("##### ✏️ تعديل البيانات")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        new_name = st.text_input(
+                            "الاسم *",
+                            value=selected_tenant.name,
+                            placeholder="اسم المستأجر"
+                        )
+                        new_type = st.selectbox(
+                            "النوع",
+                            ["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"],
+                            index=["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"].index(selected_tenant.type) if selected_tenant.type in ["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"] else 0
+                        )
+                        new_phone = st.text_input(
+                            "رقم الهاتف",
+                            value=selected_tenant.phone if selected_tenant.phone else "",
+                            placeholder="+966..."
+                        )
+                        new_email = st.text_input(
+                            "البريد الإلكتروني",
+                            value=selected_tenant.email if selected_tenant.email else "",
+                            placeholder="example@email.com"
+                        )
+                    
+                    with col2:
+                        new_national_id = st.text_input(
+                            "رقم الهوية/السجل التجاري",
+                            value=selected_tenant.national_id if selected_tenant.national_id else "",
+                            placeholder="1234567890"
+                        )
+                        new_address = st.text_area(
+                            "العنوان",
+                            value=selected_tenant.address if selected_tenant.address else "",
+                            placeholder="العنوان التفصيلي",
+                            height=100
+                        )
+                    
+                    new_notes = st.text_area(
+                        "ملاحظات",
+                        value=selected_tenant.notes if selected_tenant.notes else "",
+                        placeholder="أي ملاحظات إضافية",
+                        height=80
+                    )
+                    
+                    col_btn1, col_btn2 = st.columns([3, 1])
+                    with col_btn1:
+                        submit_edit = st.form_submit_button(
+                            "💾 حفظ التعديلات",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                    with col_btn2:
+                        delete_tenant = st.form_submit_button(
+                            "🗑️ حذف",
+                            use_container_width=True
+                        )
+                    
+                    if submit_edit:
+                        if not new_name.strip():
+                            st.error("⚠️ الاسم مطلوب")
+                        else:
+                            selected_tenant.name = new_name.strip()
+                            selected_tenant.type = new_type
+                            selected_tenant.phone = new_phone.strip() if new_phone else None
+                            selected_tenant.email = new_email.strip() if new_email else None
+                            selected_tenant.national_id = new_national_id.strip() if new_national_id else None
+                            selected_tenant.address = new_address.strip() if new_address else None
+                            selected_tenant.notes = new_notes.strip() if new_notes else None
+                            
+                            session.commit()
+                            st.success(f"✅ تم تحديث بيانات **{new_name}** بنجاح!")
+                            st.rerun()
+                    
+                    if delete_tenant:
+                        # التحقق من وجود عقود مرتبطة
+                        if tenant_contracts:
+                            st.error("⚠️ لا يمكن حذف المستأجر لأنه مرتبط بعقود. يرجى حذف العقود أولاً.")
+                        else:
+                            session.delete(selected_tenant)
+                            session.commit()
+                            st.success(f"✅ تم حذف المستأجر **{selected_tenant.name}** بنجاح!")
+                            st.rerun()
+            else:
+                st.info("لا يوجد مستأجرين مسجلين حالياً")
+        
+        # ===================================================================
+        # Tab 2: إضافة مستأجر جديد
+        # ===================================================================
+        with tab2:
+            st.markdown("#### إضافة مستأجر جديد")
+            
+            with st.form("add_tenant_form", clear_on_submit=True):
+                st.markdown("##### 📝 بيانات المستأجر الجديد")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    tenant_name = st.text_input(
+                        "الاسم *",
+                        placeholder="اسم المستأجر"
+                    )
+                    tenant_type = st.selectbox(
+                        "النوع",
+                        ["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"]
+                    )
+                    tenant_phone = st.text_input(
+                        "رقم الهاتف",
+                        placeholder="+966..."
+                    )
+                    tenant_email = st.text_input(
+                        "البريد الإلكتروني",
+                        placeholder="example@email.com"
+                    )
+                
+                with col2:
+                    tenant_national_id = st.text_input(
+                        "رقم الهوية/السجل التجاري",
+                        placeholder="1234567890"
+                    )
+                    tenant_address = st.text_area(
+                        "العنوان",
+                        placeholder="العنوان التفصيلي",
+                        height=100
+                    )
+                
+                tenant_notes = st.text_area(
+                    "ملاحظات",
+                    placeholder="أي ملاحظات إضافية",
+                    height=80
+                )
+                
+                st.markdown("---")
+                
+                submit_add = st.form_submit_button(
+                    "✅ إضافة المستأجر",
+                    use_container_width=True,
+                    type="primary"
+                )
+                
+                if submit_add:
+                    if not tenant_name.strip():
+                        st.error("⚠️ الاسم مطلوب")
+                    else:
+                        # التحقق من عدم التكرار
+                        existing = session.query(Tenant).filter_by(name=tenant_name.strip()).first()
+                        
+                        if existing:
+                            st.error(f"⚠️ المستأجر '{tenant_name}' موجود بالفعل")
+                        else:
+                            new_tenant = Tenant(
+                                name=tenant_name.strip(),
+                                type=tenant_type,
+                                phone=tenant_phone.strip() if tenant_phone else None,
+                                email=tenant_email.strip() if tenant_email else None,
+                                national_id=tenant_national_id.strip() if tenant_national_id else None,
+                                address=tenant_address.strip() if tenant_address else None,
+                                notes=tenant_notes.strip() if tenant_notes else None,
+                                created_date=date.today()
+                            )
+                            session.add(new_tenant)
+                            session.commit()
+                            st.success(f"✅ تم إضافة المستأجر **{tenant_name}** بنجاح!")
+                            st.rerun()
+    
+    # =========================================================================
+    # قسم عرض قائمة المستأجرين (للجميع)
+    # =========================================================================
+    st.markdown("---")
+    st.subheader("📋 قائمة المستأجرين")
+    
+    all_tenants = session.query(Tenant).all()
+    
+    if all_tenants:
+        # إنشاء DataFrame للعرض
+        tenants_display = []
+        for t in all_tenants:
+            # عدد العقود
+            contracts_count = session.query(Contract).filter_by(tenant_id=t.id).count()
+            
+            # حالة العقود
+            active_contracts = session.query(Contract).filter(
+                Contract.tenant_id == t.id,
+                Contract.end_date >= date.today()
+            ).count()
+            
+            status = "🟢 نشط" if active_contracts > 0 else "⚪ غير نشط"
+            
+            tenants_display.append({
+                'الاسم': t.name,
+                'النوع': t.type or '-',
+                'الهاتف': t.phone or '-',
+                'البريد الإلكتروني': t.email or '-',
+                'عدد العقود': contracts_count,
+                'الحالة': status
+            })
+        
+        tenants_df = pd.DataFrame(tenants_display)
+        
+        # إضافة خيار بحث
+        search_term = st.text_input("🔍 البحث عن مستأجر", placeholder="ابحث بالاسم أو النوع...")
+        
+        if search_term:
+            tenants_df = tenants_df[
+                tenants_df['الاسم'].str.contains(search_term, case=False, na=False) |
+                tenants_df['النوع'].str.contains(search_term, case=False, na=False)
+            ]
+        
+        st.dataframe(
+            tenants_df,
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # إحصائيات سريعة
+        st.markdown("#### 📈 إحصائيات سريعة")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            companies = sum(1 for t in all_tenants if t.type == 'شركة')
+            st.metric("شركات", companies)
+        with col2:
+            hospitals = sum(1 for t in all_tenants if t.type == 'مستشفى')
+            st.metric("مستشفيات", hospitals)
+        with col3:
+            pharmacies = sum(1 for t in all_tenants if t.type == 'صيدلية')
+            st.metric("صيدليات", pharmacies)
+        with col4:
+            individuals = sum(1 for t in all_tenants if t.type == 'فرد')
+            st.metric("أفراد", individuals)
+    else:
+        st.info("لا يوجد مستأجرين مسجلين بعد")
 # ==========================================
-# 5. التشغيل الرئيسي (main)
+# 5. التحكم في التنقل والصفحة الرئيسية
 # ==========================================
+
 def main():
-
-    # Robust session state initialization
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
-    if 'user_role' not in st.session_state:
-        st.session_state['user_role'] = None
-    if 'username' not in st.session_state:
-        st.session_state['username'] = None
-
-    if not st.session_state['logged_in']:
-        login_page()
-    else:
-        user_role = st.session_state['user_role']
-        # 1. تحديد خيارات القائمة حسب الدور
-        if user_role == 'Admin':
-            menu_options = [
-                "لوحة التحكم", 
-                "الأصول والوحدات", 
-                "إدارة المستأجرين", 
-                "العقود", 
-                "الدفعات المالية", 
-                "التقارير", 
-                "الإعدادات"
-            ]
-        elif user_role == 'Employee':
-            menu_options = [
-                "لوحة التحكم", 
-                "الأصول والوحدات", 
-                "إدارة المستأجرين"
-            ]
-        else:
-            menu_options = ["لوحة التحكم"]
-
+    
+    if st.session_state['logged_in']:
+        
         with st.sidebar:
             st.title("القائمة الرئيسية")
-            st.write(f"المستخدم: {st.session_state['username']} ({user_role})")
-            page = st.radio("الذهاب إلى", menu_options)
-            if st.button("تسجيل خروج"):
+            
+            st.markdown(f"**المستخدم:** {st.session_state['username']} ({st.session_state['user_role']})")
+            
+            role = st.session_state['user_role']
+            
+            if role == 'Admin':
+                pages = {
+                    "لوحة المؤشرات": dashboard,
+                    "إدارة الأصول والوحدات": manage_assets,
+                    "إدارة المستأجرين": manage_tenants,
+                    "إدارة العقود": manage_contracts,
+                    "إدارة الدفعات": manage_payments,
+                    "التقارير": reports_page,
+                    "الإعدادات": settings_page
+                }
+            else: # Employee role
+                pages = {
+                    "لوحة المؤشرات": dashboard,
+                    "إدارة الأصول والوحدات": manage_assets,
+                    "إدارة المستأجرين": manage_tenants,
+                    "إدارة العقود": manage_contracts,
+                    "إدارة الدفعات": manage_payments,
+                    "التقارير": reports_page
+                }
+            
+            selection = st.radio("اختر الصفحة", list(pages.keys()))
+            
+            if st.button("تسجيل الخروج", type="primary"):
                 st.session_state['logged_in'] = False
+                st.session_state['user_role'] = None
+                st.session_state['username'] = None
                 st.rerun()
 
-        # 2. توجيه المستخدم للصفحة المختارة
-        if page == "لوحة التحكم": dashboard()
-        elif page == "الأصول والوحدات": manage_assets()
-        elif page == "إدارة المستأجرين": 
-            st.header("إدارة المستأجرين")
-            df = pd.read_sql(session.query(Tenant).statement, session.bind)
-            st.dataframe(df, use_container_width=True)
-            if user_role == 'Admin':
-                with st.expander("إضافة مستأجر"):
-                    with st.form("add_t"):
-                        name = st.text_input("الاسم")
-                        ttype = st.text_input("النوع")
-                        phone = st.text_input("الهاتف")
-                        if st.form_submit_button("حفظ"):
-                            session.add(Tenant(name=name, type=ttype, phone=phone))
-                            session.commit()
-                            st.rerun()
-        elif page == "العقود": manage_contracts()
-        elif page == "الدفعات المالية": manage_payments()
-        elif page == "التقارير": reports_page()
-        elif page == "الإعدادات": settings_page()
+        # عرض الصفحة المختارة
+        pages[selection]()
+        
+    else:
+        login_page()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
