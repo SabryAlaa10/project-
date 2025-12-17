@@ -160,7 +160,7 @@ class Tenant(Base):
 class Contract(Base):
     __tablename__ = 'contracts'
     id = Column(Integer, primary_key=True)
-    contract_number = Column(String, unique=True)  # جديد
+    contract_number = Column(String, unique=True)
     tenant_id = Column(Integer, ForeignKey('tenants.id'))
     contract_type = Column(String)
     rent_amount = Column(Float)
@@ -169,6 +169,10 @@ class Contract(Base):
     end_date = Column(Date)
     vat_rate = Column(Float, default=0.0)
     linked_units_ids = Column(String)
+    status = Column(String, default="نشط")  # جديد: نشط / ملغي
+    cancellation_reason = Column(Text, nullable=True)  # جديد
+    cancelled_by = Column(String, nullable=True)  # جديد
+    cancellation_date = Column(Date, nullable=True)  # جديد
     tenant = relationship("Tenant")
 
 class Payment(Base):
@@ -189,6 +193,35 @@ class Payment(Base):
     contract = relationship("Contract")
 
 Base.metadata.create_all(engine)
+# تحديث جدول العقود لإضافة حقول الإلغاء
+try:
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    existing_columns = [col['name'] for col in inspector.get_columns('contracts')]
+    
+    with engine.connect() as conn:
+        if 'status' not in existing_columns:
+            conn.execute(text('ALTER TABLE contracts ADD COLUMN status VARCHAR DEFAULT "نشط"'))
+            # تحديث العقود الموجودة
+            conn.execute(text('UPDATE contracts SET status = "نشط" WHERE status IS NULL'))
+            print("✅ تم إضافة عمود status للعقود")
+        
+        if 'cancellation_reason' not in existing_columns:
+            conn.execute(text('ALTER TABLE contracts ADD COLUMN cancellation_reason TEXT'))
+            print("✅ تم إضافة عمود cancellation_reason")
+        
+        if 'cancelled_by' not in existing_columns:
+            conn.execute(text('ALTER TABLE contracts ADD COLUMN cancelled_by VARCHAR'))
+            print("✅ تم إضافة عمود cancelled_by")
+        
+        if 'cancellation_date' not in existing_columns:
+            conn.execute(text('ALTER TABLE contracts ADD COLUMN cancellation_date DATE'))
+            print("✅ تم إضافة عمود cancellation_date")
+        
+        conn.commit()
+except Exception as e:
+    print(f"تنبيه: {e}")
+    pass
 # إضافة رقم الدفعة لكل عقد
 try:
     from sqlalchemy import inspect, text
@@ -557,11 +590,20 @@ def dashboard():
     st.title("📊 لوحة المؤشرات (الأسبوعي)")
     
     # KPIs
-    total_income = session.query(Payment).filter_by(status='مدفوع').with_entities(Payment.total).all()
+   # استبعاد الدفعات من العقود الملغية
+    total_income = session.query(Payment).join(Contract).filter(
+        Payment.status == 'مدفوع',
+        Contract.status == "نشط"
+    ).with_entities(Payment.total).all()
     income_val = sum([x[0] for x in total_income])
     
     # الحصول على المتأخرات لتحديث KPIs والشارت الجديد
-    overdue_payments = session.query(Payment).filter(Payment.status != 'مدفوع', Payment.due_date < date.today()).all()
+   # استبعاد الدفعات من العقود الملغية
+    overdue_payments = session.query(Payment).join(Contract).filter(
+        Payment.status != 'مدفوع',
+        Payment.due_date < date.today(),
+        Contract.status == "نشط"
+    ).all()
     overdue_count = len(overdue_payments)
     overdue_amount = sum([p.total for p in overdue_payments])
 
@@ -615,7 +657,8 @@ def dashboard():
         alert_date = date.today() + pd.Timedelta(days=60)
         expiring = session.query(Contract).filter(
             Contract.end_date <= alert_date, 
-            Contract.end_date >= date.today()
+            Contract.end_date >= date.today(),
+            Contract.status == "نشط"  # ← استبعاد العقود الملغية
         ).all()
         
         if expiring:
@@ -631,14 +674,24 @@ def dashboard():
         else:
             st.success("✅ لا توجد عقود قريبة الانتهاء")
 
+import streamlit as st
+import pandas as pd
+# يفترض الكود وجود session و models (Asset, Unit, Contract) معرفة مسبقاً
+
 def manage_assets():
     st.header("🏢 إدارة الأصول والوحدات")
     
     # تحميل الأصول
-    assets = pd.read_sql(session.query(Asset).statement, session.bind)
-    
+    # ملاحظة: نستخدم statement لجلب البيانات كـ DataFrame للعرض السريع
+    try:
+        stmt = session.query(Asset).statement
+        assets = pd.read_sql(stmt, session.bind)
+    except Exception as e:
+        st.error(f"حدث خطأ أثناء تحميل الأصول: {e}")
+        return
+
     if assets.empty:
-        st.info("لا توجد أصول مُضافة بعد.")
+        st.info("لا توجد أصول مُضافة بعد. يرجى إضافة أصول من صفحة 'إدارة الأصول' أولاً.")
         return
     
     # عرض ملخص سريع للأصول
@@ -655,30 +708,34 @@ def manage_assets():
     
     st.markdown("---")
     
-    # عرض الأصول في جدول
-    with st.expander("📋 عرض جميع الأصول", expanded=False):
+    # عرض الأصول في جدول (اختياري، للعلم فقط)
+    with st.expander("📋 عرض قائمة الأصول", expanded=False):
         st.dataframe(
-            assets[['name', 'type', 'description']], 
-            use_container_width=True,
+            assets[['name', 'type', 'location']], 
+            use_container_width=True, 
             hide_index=True
         )
     
     st.markdown("---")
     
     # =========================================================================
-    # قسم الإدارة
+    # قسم الإدارة (حسب الصلاحية)
     # =========================================================================
-    if st.session_state['user_role'] == 'Admin':
-        st.subheader("⚙️ إدارة الوحدات")
+    
+    # -------------------------------------------------------------------------
+    # 1. للمدير (Admin): تعديل وإضافة وحذف
+    # -------------------------------------------------------------------------
+    if st.session_state.get('user_role') == 'Admin':
+        st.subheader("⚙️ إدارة الوحدات (مدير)")
         
-        # Tabs لتقسيم الوظائف - المدير فقط
+        # Tabs لتقسيم الوظائف
         tab1, tab2 = st.tabs(["✏️ تعديل وحدة موجودة", "➕ إضافة وحدة جديدة"])
 
         # ===================================================================
         # Tab 1: تعديل وحدة موجودة
         # ===================================================================
         with tab1:
-            st.markdown("#### تعديل بيانات أو حالة وحدة")
+            st.markdown("#### تعديل أو حذف وحدة")
             
             # اختيار الأصل
             asset_list = session.query(Asset).all()
@@ -691,12 +748,8 @@ def manage_assets():
                     key='edit_asset_select'
                 )
                 
-                # العثور على الأصل المختار
-                selected_asset = None
-                for a in asset_list:
-                    if a.name == selected_asset_name:
-                        selected_asset = a
-                        break
+                # العثور على كائن الأصل المختار
+                selected_asset = next((a for a in asset_list if a.name == selected_asset_name), None)
                 
                 if selected_asset:
                     # جلب جميع الوحدات للأصل المحدد
@@ -705,74 +758,132 @@ def manage_assets():
                     ).all()
                     
                     if all_units:
-                        with st.form("edit_unit_form", clear_on_submit=False):
-                            # إنشاء قائمة الوحدات
-                            unit_labels = []
-                            unit_ids = []
-                            for u in all_units:
-                                label = f"وحدة {u.unit_number} - الدور {u.floor or 'غير محدد'} ({u.usage_type}) - {u.status}"
-                                unit_labels.append(label)
-                                unit_ids.append(u.id)
+                        # إنشاء قائمة الوحدات للعرض في القائمة المنسدلة
+                        unit_labels = []
+                        unit_ids = []
+                        for u in all_units:
+                            label = f"وحدة {u.unit_number} - الدور {u.floor or 'غير محدد'} ({u.usage_type}) - {u.status}"
+                            unit_labels.append(label)
+                            unit_ids.append(u.id)
+                        
+                        selected_unit_label = st.selectbox(
+                            "🔑 اختر الوحدة المراد تعديلها أو حذفها",
+                            unit_labels,
+                            key='edit_unit_select'
+                        )
+                        
+                        # العثور على الوحدة المختارة
+                        selected_index = unit_labels.index(selected_unit_label)
+                        selected_unit_id = unit_ids[selected_index]
+                        unit_to_manage = session.get(Unit, selected_unit_id)
+                        
+                        if unit_to_manage:
+                            # التحقق من ارتباط الوحدة بعقود
+                            # نستخدم filter للتأكد من العقود النشطة التي تحتوي على معرف الوحدة
+                            linked_contracts = session.query(Contract).filter(
+                                Contract.linked_units_ids.like(f"%{unit_to_manage.id}%"),
+                                Contract.status == "نشط"
+                            ).all()
                             
-                            selected_unit_label = st.selectbox(
-                                "🔑 اختر الوحدة المراد تعديلها",
-                                unit_labels,
-                                key='edit_unit_select'
-                            )
+                            has_active_contracts = len(linked_contracts) > 0
                             
-                            # العثور على الوحدة المختارة
-                            selected_index = unit_labels.index(selected_unit_label)
-                            selected_unit_id = unit_ids[selected_index]
-                            unit_to_update = session.get(Unit, selected_unit_id)
+                            st.markdown("---")
                             
-                            if unit_to_update:
-                                st.markdown("---")
-                                st.markdown("##### 📝 البيانات الأساسية")
+                            # Tabs داخلية للتعديل والحذف
+                            edit_unit_tab, delete_unit_tab = st.tabs(["✏️ تعديل الوحدة", "🗑️ حذف الوحدة"])
+                            
+                            # ----- تعديل -----
+                            with edit_unit_tab:
+                                with st.form("edit_unit_form"):
+                                    st.markdown("##### 📝 البيانات الأساسية")
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        new_floor = st.text_input(
+                                            "الدور",
+                                            value=unit_to_manage.floor if unit_to_manage.floor else "",
+                                            placeholder="مثال: 1، 2، أرضي"
+                                        )
+                                        new_usage = st.selectbox(
+                                            "نوع الاستخدام",
+                                            ["سكني", "تجاري", "حق انتفاع", "سكن عمال"],
+                                            index=["سكني", "تجاري", "حق انتفاع", "سكن عمال"].index(unit_to_manage.usage_type) if unit_to_manage.usage_type in ["سكني", "تجاري", "حق انتفاع", "سكن عمال"] else 0
+                                        )
+                                    with col2:
+                                        new_area = st.number_input(
+                                            "المساحة (م²)",
+                                            min_value=0.0,
+                                            value=float(unit_to_manage.area) if unit_to_manage.area else 0.0,
+                                            step=0.5
+                                        )
+                                        new_status = st.selectbox(
+                                            "حالة الوحدة",
+                                            ["فاضي", "مؤجر", "تحت الصيانة"],
+                                            index=["فاضي", "مؤجر", "تحت الصيانة"].index(unit_to_manage.status) if unit_to_manage.status in ["فاضي", "مؤجر", "تحت الصيانة"] else 0
+                                        )
+                                    
+                                    if has_active_contracts:
+                                        st.warning(f"⚠️ هذه الوحدة مرتبطة بـ {len(linked_contracts)} عقد نشط. تغيير الحالة يدوياً قد يؤثر على البيانات.")
+                                    
+                                    st.markdown("---")
+                                    submit_edit = st.form_submit_button("💾 حفظ التعديلات", use_container_width=True, type="primary")
+                                    
+                                    if submit_edit:
+                                        unit_to_manage.floor = new_floor if new_floor else None
+                                        unit_to_manage.area = new_area if new_area > 0 else None
+                                        unit_to_manage.usage_type = new_usage
+                                        unit_to_manage.status = new_status
+                                        session.commit()
+                                        st.success(f"✅ تم تحديث الوحدة **{unit_to_manage.unit_number}** بنجاح!")
+                                        st.rerun()
+
+                            # ----- حذف -----
+                            with delete_unit_tab:
+                                st.markdown("### 🗑️ حذف الوحدة")
+                                with st.expander("📄 معلومات الوحدة", expanded=True):
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.write(f"**رقم الوحدة:** {unit_to_manage.unit_number}")
+                                        st.write(f"**الدور:** {unit_to_manage.floor or '-'}")
+                                        st.write(f"**الأصل:** {selected_asset.name}")
+                                    with col2:
+                                        st.write(f"**النوع:** {unit_to_manage.usage_type}")
+                                        st.write(f"**الحالة:** {unit_to_manage.status}")
+                                        st.write(f"**المساحة:** {unit_to_manage.area or '-'} م²")
                                 
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    new_floor = st.text_input(
-                                        "الدور",
-                                        value=unit_to_update.floor if unit_to_update.floor else "",
-                                        placeholder="مثال: 1، 2، أرضي"
+                                if has_active_contracts:
+                                    st.error("🚫 **لا يمكن حذف هذه الوحدة!**")
+                                    st.error(f"السبب: الوحدة مرتبطة بـ **{len(linked_contracts)}** عقد نشط")
+                                    with st.expander("📋 العقود المرتبطة"):
+                                        for contract in linked_contracts:
+                                            st.write(f"- عقد #{contract.contract_number or contract.id} - {contract.tenant.name}")
+                                    st.info("💡 **للحذف:** يجب إلغاء جميع العقود المرتبطة أولاً")
+                                else:
+                                    st.warning("⚠️ أنت على وشك حذف هذه الوحدة نهائياً")
+                                    st.info("✅ هذه الوحدة غير مرتبطة بأي عقود ويمكن حذفها بأمان")
+                                    st.markdown("---")
+                                    
+                                    confirm_delete = st.checkbox(
+                                        f"✅ أؤكد حذف الوحدة **{unit_to_manage.unit_number}** نهائياً",
+                                        key='confirm_delete_unit'
                                     )
-                                    new_usage = st.selectbox(
-                                        "نوع الاستخدام",
-                                        ["سكني", "تجاري", "حق انتفاع", "سكن عمال"],
-                                        index=["سكني", "تجاري", "حق انتفاع", "سكن عمال"].index(unit_to_update.usage_type)
-                                    )
-                                
-                                with col2:
-                                    new_area = st.number_input(
-                                        "المساحة (م²)",
-                                        min_value=0.0,
-                                        value=float(unit_to_update.area) if unit_to_update.area else 0.0,
-                                        step=0.5
-                                    )
-                                    new_status = st.selectbox(
-                                        "حالة الوحدة",
-                                        ["فاضي", "مؤجر", "تحت الصيانة"],
-                                        index=["فاضي", "مؤجر", "تحت الصيانة"].index(unit_to_update.status)
-                                    )
-                                
-                                st.markdown("---")
-                                
-                                submit_edit = st.form_submit_button(
-                                    "💾 حفظ التعديلات",
-                                    use_container_width=True,
-                                    type="primary"
-                                )
-                                
-                                if submit_edit:
-                                    unit_to_update.floor = new_floor if new_floor else None
-                                    unit_to_update.area = new_area if new_area > 0 else None
-                                    unit_to_update.usage_type = new_usage
-                                    unit_to_update.status = new_status
-                                    session.commit()
-                                    st.success(f"✅ تم تحديث الوحدة **{unit_to_update.unit_number}** بنجاح!")
-                                    st.rerun()
+                                    
+                                    if confirm_delete:
+                                        if st.button("🗑️ حذف الوحدة نهائياً", type="primary", use_container_width=True, key='final_delete_unit_btn'):
+                                            try:
+                                                unit_num_deleted = unit_to_manage.unit_number
+                                                session.delete(unit_to_manage)
+                                                session.commit()
+                                                st.success(f"✅ تم حذف الوحدة **{unit_num_deleted}** بنجاح!")
+                                                st.rerun()
+                                            except Exception as e:
+                                                session.rollback()
+                                                st.error(f"❌ حدث خطأ أثناء الحذف: {str(e)}")
+                                    else:
+                                        st.warning("⚠️ يرجى تأكيد الحذف بالضغط على المربع أعلاه")
                     else:
-                        st.info("ℹ️ لا توجد وحدات في هذا الأصل حالياً. يمكنك إضافة وحدات جديدة من تبويب 'إضافة وحدة جديدة'.")
+                        st.info("ℹ️ لا توجد وحدات في هذا الأصل حالياً.")
+            else:
+                st.warning("لا توجد أصول مسجلة.")
 
         # ===================================================================
         # Tab 2: إضافة وحدة جديدة
@@ -796,51 +907,24 @@ def manage_assets():
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    unit_num_new = st.text_input(
-                        "رقم/اسم الوحدة *",
-                        placeholder="مثال: 101، A1"
-                    )
+                    unit_num_new = st.text_input("رقم/اسم الوحدة *", placeholder="مثال: 101، A1")
                 with col2:
-                    floor_new = st.text_input(
-                        "الدور",
-                        placeholder="مثال: 1، أرضي"
-                    )
+                    floor_new = st.text_input("الدور", placeholder="مثال: 1، أرضي")
                 with col3:
-                    usage_new = st.selectbox(
-                        "نوع الاستخدام",
-                        ["سكني", "تجاري", "حق انتفاع", "سكن عمال"],
-                        key='usage_new'
-                    )
+                    usage_new = st.selectbox("نوع الاستخدام", ["سكني", "تجاري", "حق انتفاع", "سكن عمال"], key='usage_new')
                 
-                area_new = st.number_input(
-                    "المساحة (م²) - اختياري",
-                    min_value=0.0,
-                    value=0.0,
-                    step=0.5,
-                    key='area_new'
-                )
+                area_new = st.number_input("المساحة (م²) - اختياري", min_value=0.0, value=0.0, step=0.5, key='area_new')
                 
                 st.markdown("---")
-                
-                submit_add = st.form_submit_button(
-                    "✅ إضافة الوحدة",
-                    use_container_width=True,
-                    type="primary"
-                )
+                submit_add = st.form_submit_button("✅ إضافة الوحدة", use_container_width=True, type="primary")
                 
                 if submit_add:
                     if not unit_num_new.strip():
                         st.error("⚠️ الرجاء إدخال رقم/اسم الوحدة")
                     else:
-                        # العثور على الأصل المختار
-                        selected_asset_obj = None
-                        for a in asset_list_add:
-                            if a.name == selected_asset_add:
-                                selected_asset_obj = a
-                                break
+                        selected_asset_obj = next((a for a in asset_list_add if a.name == selected_asset_add), None)
                         
                         if selected_asset_obj:
-                            # التحقق من عدم التكرار
                             existing = session.query(Unit).filter(
                                 Unit.asset_id == selected_asset_obj.id,
                                 Unit.unit_number == unit_num_new.strip()
@@ -862,11 +946,13 @@ def manage_assets():
                                 st.success(f"✅ تم إضافة الوحدة **{unit_num_new}** بنجاح!")
                                 st.rerun()
 
-    elif st.session_state['user_role'] == 'Employee':
+    # -------------------------------------------------------------------------
+    # 2. للموظف (Employee): إضافة فقط
+    # -------------------------------------------------------------------------
+    elif st.session_state.get('user_role') == 'Employee':
         st.subheader("➕ إضافة وحدة جديدة")
         st.info("ℹ️ كموظف، يمكنك إضافة وحدات جديدة فقط. للتعديل أو الحذف، تواصل مع المدير.")
         
-        # نموذج إضافة مبسط للموظف
         with st.form("add_unit_form_employee", clear_on_submit=True):
             asset_list_add = session.query(Asset).all()
             asset_names_add = [a.name for a in asset_list_add]
@@ -882,51 +968,24 @@ def manage_assets():
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                unit_num_new = st.text_input(
-                    "رقم/اسم الوحدة *",
-                    placeholder="مثال: 101، A1"
-                )
+                unit_num_new = st.text_input("رقم/اسم الوحدة *", placeholder="مثال: 101، A1")
             with col2:
-                floor_new = st.text_input(
-                    "الدور",
-                    placeholder="مثال: 1، أرضي"
-                )
+                floor_new = st.text_input("الدور", placeholder="مثال: 1، أرضي")
             with col3:
-                usage_new = st.selectbox(
-                    "نوع الاستخدام",
-                    ["سكني", "تجاري", "حق انتفاع", "سكن عمال"],
-                    key='usage_new_emp'
-                )
+                usage_new = st.selectbox("نوع الاستخدام", ["سكني", "تجاري", "حق انتفاع", "سكن عمال"], key='usage_new_emp')
             
-            area_new = st.number_input(
-                "المساحة (م²) - اختياري",
-                min_value=0.0,
-                value=0.0,
-                step=0.5,
-                key='area_new_emp'
-            )
+            area_new = st.number_input("المساحة (م²) - اختياري", min_value=0.0, value=0.0, step=0.5, key='area_new_emp')
             
             st.markdown("---")
-            
-            submit_add = st.form_submit_button(
-                "✅ إضافة الوحدة",
-                use_container_width=True,
-                type="primary"
-            )
+            submit_add = st.form_submit_button("✅ إضافة الوحدة", use_container_width=True, type="primary")
             
             if submit_add:
                 if not unit_num_new.strip():
                     st.error("⚠️ الرجاء إدخال رقم/اسم الوحدة")
                 else:
-                    # العثور على الأصل المختار
-                    selected_asset_obj = None
-                    for a in asset_list_add:
-                        if a.name == selected_asset_add:
-                            selected_asset_obj = a
-                            break
+                    selected_asset_obj = next((a for a in asset_list_add if a.name == selected_asset_add), None)
                     
                     if selected_asset_obj:
-                        # التحقق من عدم التكرار
                         existing = session.query(Unit).filter(
                             Unit.asset_id == selected_asset_obj.id,
                             Unit.unit_number == unit_num_new.strip()
@@ -947,16 +1006,13 @@ def manage_assets():
                             session.commit()
                             st.success(f"✅ تم إضافة الوحدة **{unit_num_new}** بنجاح!")
                             st.rerun()
-        
-        
-    
+
     # =========================================================================
     # قسم عرض تفاصيل الوحدات (للجميع)
     # =========================================================================
     st.markdown("---")
     st.subheader("🔍 عرض تفاصيل الوحدات")
     
-    # قائمة الأصول
     view_asset_names = assets['name'].tolist()
     
     if view_asset_names:
@@ -966,52 +1022,54 @@ def manage_assets():
             key='view_asset_select'
         )
         
-        # العثور على الأصل
-        view_asset_id = assets[assets['name'] == selected_view_asset]['id'].values[0]
-        
-        # جلب الوحدات
-        view_units = session.query(Unit).filter(Unit.asset_id == view_asset_id).all()
-        
-        if view_units:
-            # عرض إحصائيات سريعة
-            vacant = sum(1 for u in view_units if u.status == 'فاضي')
-            rented = sum(1 for u in view_units if u.status == 'مؤجر')
-            maintenance = sum(1 for u in view_units if u.status == 'تحت الصيانة')
+        # العثور على ID الأصل من DataFrame
+        # نفترض أن الأسماء فريدة
+        view_asset_row = assets[assets['name'] == selected_view_asset]
+        if not view_asset_row.empty:
+            view_asset_id = view_asset_row['id'].values[0]
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("🟢 فارغة", vacant)
-            with col2:
-                st.metric("🔴 مؤجرة", rented)
-            with col3:
-                st.metric("🟡 صيانة", maintenance)
+            # جلب الوحدات
+            view_units = session.query(Unit).filter(Unit.asset_id == view_asset_id).all()
             
-            # إنشاء DataFrame للعرض
-            units_display_data = []
-            for u in view_units:
-                status_icon = {
-                    "فاضي": "🟢",
-                    "مؤجر": "🔴",
-                    "تحت الصيانة": "🟡"
-                }.get(u.status, "⚪")
+            if view_units:
+                # عرض إحصائيات سريعة
+                vacant = sum(1 for u in view_units if u.status == 'فاضي')
+                rented = sum(1 for u in view_units if u.status == 'مؤجر')
+                maintenance = sum(1 for u in view_units if u.status == 'تحت الصيانة')
                 
-                units_display_data.append({
-                    'رقم الوحدة': u.unit_number,
-                    'الدور': u.floor if u.floor else '-',
-                    'النوع': u.usage_type,
-                    'الحالة': f"{status_icon} {u.status}",
-                    'المساحة (م²)': u.area if u.area else '-'
-                })
-            
-            units_df = pd.DataFrame(units_display_data)
-            
-            st.dataframe(
-                units_df,
-                use_container_width=True,
-                hide_index=True
-            )
+                col1, col2, col3 = st.columns(3)
+                with col1: st.metric("🟢 فارغة", vacant)
+                with col2: st.metric("🔴 مؤجرة", rented)
+                with col3: st.metric("🟡 صيانة", maintenance)
+                
+                # إنشاء DataFrame للعرض
+                units_display_data = []
+                for u in view_units:
+                    status_icon = {
+                        "فاضي": "🟢",
+                        "مؤجر": "🔴",
+                        "تحت الصيانة": "🟡"
+                    }.get(u.status, "⚪")
+                    
+                    units_display_data.append({
+                        'رقم الوحدة': u.unit_number,
+                        'الدور': u.floor if u.floor else '-',
+                        'النوع': u.usage_type,
+                        'الحالة': f"{status_icon} {u.status}",
+                        'المساحة (م²)': u.area if u.area else '-'
+                    })
+                
+                units_df = pd.DataFrame(units_display_data)
+                
+                st.dataframe(
+                    units_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("لا توجد وحدات مضافة لهذا الأصل بعد.")
         else:
-            st.info("لا توجد وحدات مضافة لهذا الأصل بعد.")
+            st.error("حدث خطأ في تحديد الأصل المختار.")
     else:
         st.info("لا توجد أصول لعرض وحداتها.")
 
@@ -1162,13 +1220,239 @@ def manage_contracts():
                         st.success(f"✅ تم إنشاء العقد رقم **{contract_number}** بنجاح! مدة العقد: **{contract_duration} سنة**")
                         st.balloons()
                         st.rerun()
+    # عرض العقود
+    st.markdown("---")
+    st.subheader("📋 قائمة العقود")
+    
+    # فلتر العقود
+    filter_status = st.radio(
+        "عرض:",
+        ["العقود النشطة فقط", "العقود الملغية فقط", "جميع العقود"],
+        horizontal=True
+    )
+    
+    # جلب العقود حسب الفلتر
+    if filter_status == "العقود النشطة فقط":
+        contracts = session.query(Contract).filter_by(status="نشط").all()
+    elif filter_status == "العقود الملغية فقط":
+        contracts = session.query(Contract).filter_by(status="ملغي").all()
+    else:
+        contracts = session.query(Contract).all()
+    
+    if contracts:
+        contracts_data = []
+        for c in contracts:
+            # حالة العقد مع أيقونة
+            status_icon = "✅" if c.status == "نشط" else "🚫"
+            
+            # الوحدات
+            unit_names = []
+            if c.linked_units_ids:
+                for uid in c.linked_units_ids.split(','):
+                    u = session.get(Unit, int(uid))
+                    if u:
+                        unit_names.append(f"{u.unit_number}")
+            
+            contracts_data.append({
+                'رقم العقد': c.contract_number or c.id,
+                'المستأجر': c.tenant.name,
+                'النوع': c.contract_type,
+                'القيمة السنوية': f"{c.rent_amount:,.0f}",
+                'الوحدات': ', '.join(unit_names) if unit_names else '-',
+                'تاريخ البداية': c.start_date,
+                'تاريخ النهاية': c.end_date,
+                'الحالة': f"{status_icon} {c.status}"
+            })
+        
+        contracts_df = pd.DataFrame(contracts_data)
+        st.dataframe(contracts_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("لا توجد عقود مطابقة للفلتر المحدد")
+def cancel_contract_page():
+    """صفحة إلغاء العقود (للمدير فقط)"""
+    st.header("🚫 إلغاء العقد")
+    
+    if st.session_state['user_role'] != 'Admin':
+        st.error("⚠️ هذه الصفحة متاحة للمدير فقط")
+        return
+    
+    st.warning("⚠️ تنبيه: إلغاء العقد لا يحذفه من النظام، بل يغير حالته إلى 'ملغي' للحفاظ على السجل التاريخي.")
+    
+    # جلب العقود النشطة فقط
+    active_contracts = session.query(Contract).filter_by(status="نشط").all()
+    
+    if not active_contracts:
+        st.info("لا توجد عقود نشطة لإلغائها")
+        return
+    
+    # اختيار العقد
+    contract_options = {}
+    for c in active_contracts:
+        label = f"عقد #{c.contract_number if c.contract_number else c.id} - {c.tenant.name} ({c.contract_type})"
+        contract_options[label] = c.id
+    
+    selected_contract_label = st.selectbox(
+        "اختر العقد المراد إلغاؤه",
+        list(contract_options.keys()),
+        key='cancel_contract_select'
+    )
+    
+    contract_id = contract_options[selected_contract_label]
+    contract = session.get(Contract, contract_id)
+    
+    if contract:
+        # عرض تفاصيل العقد
+        with st.expander("📋 تفاصيل العقد", expanded=True):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write(f"**رقم العقد:** {contract.contract_number or contract.id}")
+                st.write(f"**المستأجر:** {contract.tenant.name}")
+            with col2:
+                st.write(f"**النوع:** {contract.contract_type}")
+                st.write(f"**القيمة السنوية:** {contract.rent_amount:,.0f} ريال")
+            with col3:
+                st.write(f"**من:** {contract.start_date}")
+                st.write(f"**إلى:** {contract.end_date}")
+            
+            # عرض الوحدات المرتبطة
+            if contract.linked_units_ids:
+                unit_ids = contract.linked_units_ids.split(',')
+                unit_names = []
+                for uid in unit_ids:
+                    u = session.get(Unit, int(uid))
+                    if u:
+                        unit_names.append(f"{u.unit_number} ({u.asset.name})")
+                st.write(f"**الوحدات:** {', '.join(unit_names)}")
+        
+        # التحقق من وجود دفعات
+        payments = session.query(Payment).filter_by(contract_id=contract.id).all()
+        paid_payments = [p for p in payments if p.status == "مدفوع"]
+        pending_payments = [p for p in payments if p.status != "مدفوع"]
+        
+        if payments:
+            st.markdown("---")
+            st.subheader("📊 حالة الدفعات")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("إجمالي الدفعات", len(payments))
+            with col2:
+                st.metric("مدفوع", len(paid_payments))
+            with col3:
+                st.metric("متبقي", len(pending_payments))
+            
+            if pending_payments:
+                st.warning(f"⚠️ يوجد {len(pending_payments)} دفعة غير مدفوعة. تأكد من مراجعة الحالة المالية قبل الإلغاء.")
+        
+        st.markdown("---")
+        
+        # نموذج الإلغاء
+        st.markdown("### 📝 بيانات الإلغاء")
+        
+        cancellation_reason_type = st.selectbox(
+            "سبب الإلغاء *",
+            [
+                "إدخال خاطئ",
+                "عقد مكرر",
+                "خطأ إداري",
+                "طلب المستأجر",
+                "إخلاء الوحدة",
+                "أخرى"
+            ],
+            key='cancel_reason_select'
+        )
+        
+        additional_notes = st.text_area(
+            "تفاصيل إضافية",
+            placeholder="أي تفاصيل إضافية عن سبب الإلغاء...",
+            height=100,
+            key='cancel_notes_area'
+        )
+        
+        st.markdown("---")
+        st.markdown("### ⚠️ تأكيد الإلغاء")
+        
+        st.error("**تحذير:** بعد الإلغاء:")
+        st.markdown("""
+        - ✅ سيتم تغيير حالة العقد إلى **ملغي**
+        - ✅ ستبقى جميع البيانات في النظام (لن يتم الحذف)
+        - ✅ سيتم تحرير الوحدات المرتبطة (تصبح فاضية)
+        - ✅ لن يظهر العقد في التقارير المالية
+        - ⚠️ **الدفعات غير المدفوعة ستبقى في السجل**
+        """)
+        
+        st.markdown("---")
+        
+        # تأكيد الإلغاء
+        confirm = st.checkbox(
+            "✅ **أؤكد إلغاء هذا العقد ومعرفتي بالعواقب**",
+            help="يجب تفعيل هذا الخيار لتمكين زر الإلغاء",
+            key='cancel_confirm_checkbox'
+        )
+        
+        if not confirm:
+            st.warning("⚠️ يرجى تأكيد الإلغاء بالضغط على المربع أعلاه")
+        
+        # زر الإلغاء خارج الـ form
+        if st.button(
+            "🚫 إلغاء العقد نهائياً",
+            use_container_width=True,
+            type="primary",
+            disabled=not confirm,
+            key='cancel_submit_button'
+        ):
+            if not confirm:
+                st.error("⚠️ يجب تأكيد الإلغاء")
+            else:
+                # تحديث حالة العقد
+                full_reason = f"{cancellation_reason_type}"
+                if additional_notes.strip():
+                    full_reason += f" - {additional_notes.strip()}"
+                
+                contract.status = "ملغي"
+                contract.cancellation_reason = full_reason
+                contract.cancelled_by = st.session_state['username']
+                contract.cancellation_date = date.today()
+                
+                # تحرير الوحدات
+                if contract.linked_units_ids:
+                    unit_ids = contract.linked_units_ids.split(',')
+                    for uid in unit_ids:
+                        unit = session.get(Unit, int(uid))
+                        if unit:
+                            unit.status = "فاضي"
+                
+                # حذف الدفعات غير المدفوعة (اختياري)
+                pending_payments_to_delete = session.query(Payment).filter(
+                    Payment.contract_id == contract.id,
+                    Payment.status != "مدفوع"
+                ).all()
+                
+                deleted_count = 0
+                if pending_payments_to_delete:
+                    for payment in pending_payments_to_delete:
+                        session.delete(payment)
+                    deleted_count = len(pending_payments_to_delete)
+                
+                session.commit()
+                
+                st.success(f"✅ تم إلغاء العقد #{contract.contract_number or contract.id} بنجاح!")
+                st.info(f"📝 السبب: {full_reason}")
+                st.info(f"👤 تم الإلغاء بواسطة: {st.session_state['username']}")
+                st.info(f"📅 تاريخ الإلغاء: {date.today()}")
+                
+                if deleted_count > 0:
+                    st.info(f"🗑️ تم حذف {deleted_count} دفعة غير مدفوعة")
+                
+                st.balloons()
+                st.rerun()
 def manage_payments():
     st.header("💰 إدارة الدفعات")
      # تنبيه للموظف
     if st.session_state['user_role'] == 'Employee':
         st.info("ℹ️ كموظف، يمكنك تسجيل الدفعات وتوليدها فقط. لا يمكنك تعديل أو حذف الدفعات الموجودة.")
     
-    contracts = session.query(Contract).all()
+    # عرض العقود النشطة فقط (استبعاد الملغية)
+    contracts = session.query(Contract).filter_by(status="نشط").all()
     c_opts = {f"عقد #{c.contract_number if c.contract_number else c.id} - {c.tenant.name}": c for c in contracts}
     
     if not c_opts:
@@ -1568,6 +1852,8 @@ def reports_page():
             Payment.status.label("الحالة"), 
             Payment.beneficiary.label("المستفيد")
         ).select_from(Payment).join(Contract).join(Tenant)
+        # استبعاد العقود الملغية
+        query = query.filter(Contract.status == "نشط")
         
         # تطبيق الفلاتر
         if selected_asset != "الكل":
@@ -1623,8 +1909,16 @@ def reports_page():
 
     elif rtype == "المتأخرات":
         query = session.query(
-            Tenant.name.label("المستأجر"), Tenant.phone.label("هاتف المستأجر"), Payment.due_date.label("تاريخ الاستحقاق"), Payment.total.label("المبلغ المتأخر")
-        ).select_from(Payment).join(Contract).join(Tenant).filter(Payment.status != 'مدفوع', Payment.due_date < date.today())
+            Tenant.name.label("المستأجر"), 
+            Tenant.phone.label("هاتف المستأجر"), 
+            Payment.due_date.label("تاريخ الاستحقاق"), 
+            Payment.total.label("المبلغ المتأخر")
+        ).select_from(Payment).join(Contract).join(Tenant).filter(
+            Payment.status != 'مدفوع', 
+            Payment.due_date < date.today(),
+            Contract.status == "نشط"  # ← استبعاد العقود الملغية
+        )
+    
         
         df = pd.read_sql(query.statement, session.bind)
         if not df.empty:
@@ -1647,7 +1941,8 @@ def reports_page():
             all_payments_data = [] 
             
             # عقود المستأجر
-            contracts = session.query(Contract).filter_by(tenant_id=t_obj.id).all()
+            # عقود المستأجر (النشطة فقط)
+            contracts = session.query(Contract).filter_by(tenant_id=t_obj.id, status="نشط").all()
             for c in contracts:
                 with st.expander(f"عقد رقم {c.id} ({c.contract_type}) - يبدأ {c.start_date}"):
                     # الوحدات
@@ -1744,8 +2039,14 @@ def settings_page():
                         st.success("تم تحديث الإعدادات بنجاح. يرجى تسجيل الخروج والدخول مرة أخرى للتحقق من التغييرات.")
                         st.rerun()
     else:
-         st.warning("هذه الصفحة متاحة للمدير فقط.")
+        st.warning("هذه الصفحة متاحة للمدير فقط.")
 
+
+
+
+# =================================================================
+# تعديل دالة manage_tenants() لإعطاء الموظف صلاحيات الإضافة والتعديل
+# =================================================================
 
 
 def manage_tenants():
@@ -1754,7 +2055,10 @@ def manage_tenants():
     # عرض ملخص سريع
     st.subheader("📊 ملخص المستأجرين")
     total_tenants = session.query(Tenant).count()
-    active_contracts = session.query(Contract).filter(Contract.end_date >= date.today()).count()
+    active_contracts = session.query(Contract).filter(
+        Contract.end_date >= date.today(),
+        Contract.status == "نشط"
+    ).count()
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -1762,25 +2066,40 @@ def manage_tenants():
     with col2:
         st.metric("العقود النشطة", active_contracts)
     with col3:
-        # حساب المستأجرين بدون عقود
         tenants_with_contracts = session.query(Contract.tenant_id).distinct().count()
         st.metric("مستأجرين بدون عقود", total_tenants - tenants_with_contracts)
     
     st.markdown("---")
     
     # =========================================================================
-    # قسم الإدارة (للمسؤولين فقط)
+    # قسم الإدارة - متاح للمدير والموظف (مع اختلاف الصلاحيات)
     # =========================================================================
-    if st.session_state['user_role'] == 'Admin':
+    
+    # ✅ التعديل الأساسي: السماح للموظف أيضاً بالوصول لهذا القسم
+    if st.session_state['user_role'] in ['Admin', 'Employee']:  # ← التغيير هنا
+        
+        # رسالة توضيحية للموظف
+        if st.session_state['user_role'] == 'Employee':
+            st.info("ℹ️ **صلاحياتك كموظف:** يمكنك إضافة وتعديل المستأجرين. الحذف متاح للمدير فقط.")
+        
         st.subheader("⚙️ إدارة بيانات المستأجرين")
         
-        tab1, tab2 = st.tabs(["✏️ تعديل/عرض مستأجر", "➕ إضافة مستأجر جديد"])
+        # ✅ التعديل: تغيير عدد الـ Tabs حسب الصلاحية
+        if st.session_state['user_role'] == 'Admin':
+            # المدير: تعديل/عرض + إضافة
+            tab1, tab2 = st.tabs(["✏️ تعديل/عرض/حذف مستأجر", "➕ إضافة مستأجر جديد"])
+        else:
+            # الموظف: تعديل + إضافة فقط (بدون حذف)
+            tab1, tab2 = st.tabs(["✏️ تعديل مستأجر", "➕ إضافة مستأجر جديد"])
         
         # ===================================================================
-        # Tab 1: تعديل/عرض مستأجر موجود
+        # Tab 1: تعديل/عرض/حذف مستأجر موجود
         # ===================================================================
         with tab1:
-            st.markdown("#### تعديل أو عرض بيانات مستأجر")
+            if st.session_state['user_role'] == 'Admin':
+                st.markdown("#### تعديل أو عرض أو حذف بيانات مستأجر")
+            else:
+                st.markdown("#### تعديل بيانات مستأجر")
             
             tenants_list = session.query(Tenant).all()
             
@@ -1819,7 +2138,6 @@ def manage_tenants():
                     st.markdown("##### 📑 العقود المرتبطة")
                     contracts_data = []
                     for c in tenant_contracts:
-                        # جلب أسماء الوحدات
                         unit_names = []
                         if c.linked_units_ids:
                             for uid in c.linked_units_ids.split(','):
@@ -1828,12 +2146,13 @@ def manage_tenants():
                                     unit_names.append(f"{u.unit_number} ({u.asset.name})")
                         
                         contracts_data.append({
-                            'رقم العقد': c.id,
+                            'رقم العقد': c.contract_number or c.id,
                             'النوع': c.contract_type,
                             'القيمة السنوية': f"{c.rent_amount:,.0f}",
                             'الوحدات': ', '.join(unit_names) if unit_names else '-',
                             'تاريخ البداية': c.start_date,
-                            'تاريخ النهاية': c.end_date
+                            'تاريخ النهاية': c.end_date,
+                            'الحالة': c.status
                         })
                     
                     contracts_df = pd.DataFrame(contracts_data)
@@ -1843,96 +2162,222 @@ def manage_tenants():
                 
                 st.markdown("---")
                 
-                # نموذج التعديل
-                with st.form("edit_tenant_form"):
-                    st.markdown("##### ✏️ تعديل البيانات")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        new_name = st.text_input(
-                            "الاسم *",
-                            value=selected_tenant.name,
-                            placeholder="اسم المستأجر"
+                # ✅ التعديل: Sub-tabs مختلفة حسب الصلاحية
+                if st.session_state['user_role'] == 'Admin':
+                    # المدير: تعديل + حذف
+                    edit_tenant_tab, delete_tenant_tab = st.tabs(["✏️ تعديل البيانات", "🗑️ حذف المستأجر"])
+                else:
+                    # الموظف: تعديل فقط (بدون tab الحذف)
+                    edit_tenant_tab = st.container()
+                
+                # ===== Tab/Container: تعديل البيانات (متاح للجميع) =====
+                with edit_tenant_tab:
+                    with st.form("edit_tenant_form"):
+                        st.markdown("##### ✏️ تعديل البيانات")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            new_name = st.text_input(
+                                "الاسم *",
+                                value=selected_tenant.name,
+                                placeholder="اسم المستأجر"
+                            )
+                            new_type = st.selectbox(
+                                "النوع",
+                                ["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"],
+                                index=["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"].index(selected_tenant.type) if selected_tenant.type in ["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"] else 0
+                            )
+                            new_phone = st.text_input(
+                                "رقم الهاتف",
+                                value=selected_tenant.phone if selected_tenant.phone else "",
+                                placeholder="+966..."
+                            )
+                            new_email = st.text_input(
+                                "البريد الإلكتروني",
+                                value=selected_tenant.email if selected_tenant.email else "",
+                                placeholder="example@email.com"
+                            )
+                        
+                        with col2:
+                            new_national_id = st.text_input(
+                                "رقم الهوية/السجل التجاري",
+                                value=selected_tenant.national_id if selected_tenant.national_id else "",
+                                placeholder="1234567890"
+                            )
+                            new_address = st.text_area(
+                                "العنوان",
+                                value=selected_tenant.address if selected_tenant.address else "",
+                                placeholder="العنوان التفصيلي",
+                                height=100
+                            )
+                        
+                        new_notes = st.text_area(
+                            "ملاحظات",
+                            value=selected_tenant.notes if selected_tenant.notes else "",
+                            placeholder="أي ملاحظات إضافية",
+                            height=80
                         )
-                        new_type = st.selectbox(
-                            "النوع",
-                            ["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"],
-                            index=["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"].index(selected_tenant.type) if selected_tenant.type in ["شركة", "مستشفى", "صيدلية", "مستثمر", "فرد", "أخرى"] else 0
-                        )
-                        new_phone = st.text_input(
-                            "رقم الهاتف",
-                            value=selected_tenant.phone if selected_tenant.phone else "",
-                            placeholder="+966..."
-                        )
-                        new_email = st.text_input(
-                            "البريد الإلكتروني",
-                            value=selected_tenant.email if selected_tenant.email else "",
-                            placeholder="example@email.com"
-                        )
-                    
-                    with col2:
-                        new_national_id = st.text_input(
-                            "رقم الهوية/السجل التجاري",
-                            value=selected_tenant.national_id if selected_tenant.national_id else "",
-                            placeholder="1234567890"
-                        )
-                        new_address = st.text_area(
-                            "العنوان",
-                            value=selected_tenant.address if selected_tenant.address else "",
-                            placeholder="العنوان التفصيلي",
-                            height=100
-                        )
-                    
-                    new_notes = st.text_area(
-                        "ملاحظات",
-                        value=selected_tenant.notes if selected_tenant.notes else "",
-                        placeholder="أي ملاحظات إضافية",
-                        height=80
-                    )
-                    
-                    col_btn1, col_btn2 = st.columns([3, 1])
-                    with col_btn1:
+                        
+                        st.markdown("---")
+                        
                         submit_edit = st.form_submit_button(
                             "💾 حفظ التعديلات",
                             use_container_width=True,
                             type="primary"
                         )
-                    with col_btn2:
-                        delete_tenant = st.form_submit_button(
-                            "🗑️ حذف",
-                            use_container_width=True
-                        )
-                    
-                    if submit_edit:
-                        if not new_name.strip():
-                            st.error("⚠️ الاسم مطلوب")
-                        else:
-                            selected_tenant.name = new_name.strip()
-                            selected_tenant.type = new_type
-                            selected_tenant.phone = new_phone.strip() if new_phone else None
-                            selected_tenant.email = new_email.strip() if new_email else None
-                            selected_tenant.national_id = new_national_id.strip() if new_national_id else None
-                            selected_tenant.address = new_address.strip() if new_address else None
-                            selected_tenant.notes = new_notes.strip() if new_notes else None
+                        
+                        if submit_edit:
+                            if not new_name.strip():
+                                st.error("⚠️ الاسم مطلوب")
+                            else:
+                                selected_tenant.name = new_name.strip()
+                                selected_tenant.type = new_type
+                                selected_tenant.phone = new_phone.strip() if new_phone else None
+                                selected_tenant.email = new_email.strip() if new_email else None
+                                selected_tenant.national_id = new_national_id.strip() if new_national_id else None
+                                selected_tenant.address = new_address.strip() if new_address else None
+                                selected_tenant.notes = new_notes.strip() if new_notes else None
+                                
+                                session.commit()
+                                st.success(f"✅ تم تحديث بيانات **{new_name}** بنجاح!")
+                                st.rerun()
+                
+                # ===== Tab: حذف المستأجر (للمدير فقط) =====
+                if st.session_state['user_role'] == 'Admin':
+                    with delete_tenant_tab:
+                        st.markdown("### 🗑️ حذف المستأجر")
+                        
+                        # جلب العقود المرتبطة
+                        active_contracts = [c for c in tenant_contracts if c.status == "نشط"]
+                        cancelled_contracts = [c for c in tenant_contracts if c.status == "ملغي"]
+                        
+                        # عرض الإحصائيات
+                        with st.expander("📊 إحصائيات المستأجر", expanded=True):
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("إجمالي العقود", len(tenant_contracts))
+                            with col2:
+                                st.metric("عقود نشطة", len(active_contracts))
+                            with col3:
+                                st.metric("عقود ملغية", len(cancelled_contracts))
+                        
+                        # التحقق من إمكانية الحذف
+                        if len(active_contracts) > 0:
+                            st.error("🚫 **لا يمكن حذف هذا المستأجر!**")
+                            st.error(f"السبب: المستأجر لديه **{len(active_contracts)}** عقد نشط")
                             
-                            session.commit()
-                            st.success(f"✅ تم تحديث بيانات **{new_name}** بنجاح!")
-                            st.rerun()
-                    
-                    if delete_tenant:
-                        # التحقق من وجود عقود مرتبطة
-                        if tenant_contracts:
-                            st.error("⚠️ لا يمكن حذف المستأجر لأنه مرتبط بعقود. يرجى حذف العقود أولاً.")
+                            with st.expander("📋 العقود النشطة"):
+                                for contract in active_contracts:
+                                    unit_names = []
+                                    if contract.linked_units_ids:
+                                        for uid in contract.linked_units_ids.split(','):
+                                            u = session.get(Unit, int(uid))
+                                            if u:
+                                                unit_names.append(f"{u.unit_number} ({u.asset.name})")
+                                    
+                                    st.write(f"- عقد #{contract.contract_number or contract.id}")
+                                    st.write(f"  - النوع: {contract.contract_type}")
+                                    st.write(f"  - القيمة: {contract.rent_amount:,.0f} ريال")
+                                    st.write(f"  - الوحدات: {', '.join(unit_names) if unit_names else '-'}")
+                                    st.markdown("---")
+                            
+                            st.info("💡 **للحذف:** يجب إلغاء جميع العقود النشطة من صفحة 'إلغاء عقد'")
+                        
                         else:
-                            session.delete(selected_tenant)
-                            session.commit()
-                            st.success(f"✅ تم حذف المستأجر **{selected_tenant.name}** بنجاح!")
-                            st.rerun()
+                            # يمكن الحذف
+                            if len(cancelled_contracts) > 0:
+                                st.warning(f"⚠️ تنبيه: المستأجر لديه {len(cancelled_contracts)} عقد ملغي")
+                                
+                                delete_mode = st.radio(
+                                    "اختر طريقة الحذف:",
+                                    [
+                                        "حذف المستأجر فقط (العقود الملغية ستبقى)",
+                                        "حذف المستأجر وجميع العقود الملغية معاً"
+                                    ],
+                                    key='delete_mode_tenant'
+                                )
+                                
+                                if delete_mode == "حذف المستأجر وجميع العقود الملغية معاً":
+                                    st.error("⚠️ **تحذير:** سيتم حذف المستأجر وجميع العقود الملغية المرتبطة به!")
+                                    
+                                    with st.expander("📋 العقود التي سيتم حذفها"):
+                                        for contract in cancelled_contracts:
+                                            payments = session.query(Payment).filter_by(contract_id=contract.id).all()
+                                            st.write(f"- عقد #{contract.contract_number or contract.id}")
+                                            st.write(f"  - عدد الدفعات: {len(payments)}")
+                                            st.markdown("---")
+                                else:
+                                    st.info("ℹ️ العقود الملغية ستبقى في النظام للسجل التاريخي")
+                            else:
+                                st.success("✅ هذا المستأجر ليس لديه عقود ويمكن حذفه بأمان")
+                            
+                            st.markdown("---")
+                            st.markdown("### ⚠️ تأكيد الحذف")
+                            
+                            st.markdown(f"""
+                            <div style="background-color: #3d1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4444;">
+                                <h4 style="color: #ff6b6b; margin-top: 0;">⚠️ تحذير نهائي</h4>
+                                <p>أنت على وشك حذف المستأجر: <strong>{selected_tenant.name}</strong></p>
+                                <p>هذا الإجراء <strong>لا يمكن التراجع عنه!</strong></p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            
+                            confirm_text = st.text_input(
+                                f"للتأكيد، اكتب اسم المستأجر: **{selected_tenant.name}**",
+                                placeholder=selected_tenant.name,
+                                key='confirm_delete_tenant'
+                            )
+                            
+                            if confirm_text == selected_tenant.name:
+                                st.success("✅ تم التأكيد - يمكنك الآن الضغط على زر الحذف")
+                                
+                                if st.button(
+                                    "🗑️ حذف المستأجر نهائياً",
+                                    type="primary",
+                                    use_container_width=True,
+                                    key='final_delete_tenant_btn'
+                                ):
+                                    try:
+                                        deleted_contracts_count = 0
+                                        deleted_payments_count = 0
+                                        
+                                        if len(cancelled_contracts) > 0 and delete_mode == "حذف المستأجر وجميع العقود الملغية معاً":
+                                            for contract in cancelled_contracts:
+                                                payments = session.query(Payment).filter_by(contract_id=contract.id).all()
+                                                for payment in payments:
+                                                    session.delete(payment)
+                                                    deleted_payments_count += 1
+                                                
+                                                session.delete(contract)
+                                                deleted_contracts_count += 1
+                                        
+                                        tenant_name = selected_tenant.name
+                                        session.delete(selected_tenant)
+                                        session.commit()
+                                        
+                                        st.success(f"✅ تم حذف المستأجر **{tenant_name}** بنجاح!")
+                                        
+                                        if deleted_contracts_count > 0:
+                                            st.info(f"🗑️ تم حذف {deleted_contracts_count} عقد ملغي")
+                                        
+                                        if deleted_payments_count > 0:
+                                            st.info(f"🗑️ تم حذف {deleted_payments_count} دفعة")
+                                        
+                                        st.balloons()
+                                        st.rerun()
+                                        
+                                    except Exception as e:
+                                        session.rollback()
+                                        st.error(f"❌ حدث خطأ أثناء الحذف: {str(e)}")
+                            else:
+                                st.warning("⚠️ يرجى كتابة اسم المستأجر بشكل صحيح للتأكيد")
             else:
                 st.info("لا يوجد مستأجرين مسجلين حالياً")
         
         # ===================================================================
-        # Tab 2: إضافة مستأجر جديد
+        # Tab 2: إضافة مستأجر جديد (متاح للجميع)
         # ===================================================================
         with tab2:
             st.markdown("#### إضافة مستأجر جديد")
@@ -1988,7 +2433,6 @@ def manage_tenants():
                     if not tenant_name.strip():
                         st.error("⚠️ الاسم مطلوب")
                     else:
-                        # التحقق من عدم التكرار
                         existing = session.query(Tenant).filter_by(name=tenant_name.strip()).first()
                         
                         if existing:
@@ -2007,6 +2451,7 @@ def manage_tenants():
                             session.add(new_tenant)
                             session.commit()
                             st.success(f"✅ تم إضافة المستأجر **{tenant_name}** بنجاح!")
+                            st.balloons()
                             st.rerun()
     
     # =========================================================================
@@ -2018,16 +2463,14 @@ def manage_tenants():
     all_tenants = session.query(Tenant).all()
     
     if all_tenants:
-        # إنشاء DataFrame للعرض
         tenants_display = []
         for t in all_tenants:
-            # عدد العقود
-            contracts_count = session.query(Contract).filter_by(tenant_id=t.id).count()
+            contracts_count = session.query(Contract).filter_by(tenant_id=t.id, status="نشط").count()
             
-            # حالة العقود
             active_contracts = session.query(Contract).filter(
                 Contract.tenant_id == t.id,
-                Contract.end_date >= date.today()
+                Contract.end_date >= date.today(),
+                Contract.status == "نشط"
             ).count()
             
             status = "🟢 نشط" if active_contracts > 0 else "⚪ غير نشط"
@@ -2043,7 +2486,6 @@ def manage_tenants():
         
         tenants_df = pd.DataFrame(tenants_display)
         
-        # إضافة خيار بحث
         search_term = st.text_input("🔍 البحث عن مستأجر", placeholder="ابحث بالاسم أو النوع...")
         
         if search_term:
@@ -2058,7 +2500,6 @@ def manage_tenants():
             hide_index=True
         )
         
-        # إحصائيات سريعة
         st.markdown("#### 📈 إحصائيات سريعة")
         col1, col2, col3, col4 = st.columns(4)
         
@@ -2076,8 +2517,467 @@ def manage_tenants():
             st.metric("أفراد", individuals)
     else:
         st.info("لا يوجد مستأجرين مسجلين بعد")
-# ==========================================
-# 5. التحكم في التنقل والصفحة الرئيسية
+
+import streamlit as st
+import pandas as pd
+# يفترض الكود وجود session و models (Asset, Unit, Contract) معرفة مسبقاً في التطبيق
+
+def manage_assets_only():
+    """صفحة مخصصة لإدارة الأصول فقط"""
+    st.header("🏢 إدارة الأصول")
+    
+    # جلب جميع الأصول
+    all_assets = session.query(Asset).all()
+    total_assets = len(all_assets)
+    
+    # عرض ملخص سريع
+    st.subheader("📊 ملخص الأصول")
+    
+    # تصنيف الأصول حسب النوع
+    buildings = sum(1 for a in all_assets if a.type == "عمارة")
+    warehouses = sum(1 for a in all_assets if a.type == "مستودع")
+    lands = sum(1 for a in all_assets if a.type in ["أرض", "محطة وقود"])
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("إجمالي الأصول", total_assets)
+    with col2:
+        st.metric("عمارات", buildings)
+    with col3:
+        st.metric("مستودعات", warehouses)
+    with col4:
+        st.metric("أراضي", lands)
+    
+    st.markdown("---")
+    
+    # =========================================================================
+    # للمدير: جميع الصلاحيات
+    # =========================================================================
+    if st.session_state.get('user_role') == 'Admin':
+        st.subheader("⚙️ إدارة الأصول (مدير)")
+        
+        # Tabs لتقسيم الوظائف
+        tab1, tab2, tab3 = st.tabs(["📋 عرض الأصول", "➕ إضافة أصل جديد", "✏️ تعديل أصل موجود"])
+        
+        # ===================================================================
+        # Tab 1: عرض الأصول
+        # ===================================================================
+        with tab1:
+            st.markdown("#### 📋 قائمة الأصول المسجلة")
+            
+            if all_assets:
+                assets_display = []
+                for asset in all_assets:
+                    # عد الوحدات في كل أصل
+                    units_count = session.query(Unit).filter_by(asset_id=asset.id).count()
+                    rented_units = session.query(Unit).filter_by(asset_id=asset.id, status="مؤجر").count()
+                    
+                    assets_display.append({
+                        'ID': asset.id,
+                        'اسم الأصل': asset.name,
+                        'النوع': asset.type,
+                        'الموقع': asset.location or '-',
+                        'عدد الوحدات': units_count,
+                        'الوحدات المؤجرة': rented_units,
+                        'الوصف': asset.description or '-'
+                    })
+                
+                assets_df = pd.DataFrame(assets_display)
+                st.dataframe(assets_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("لا توجد أصول مسجلة حالياً")
+        
+        # ===================================================================
+        # Tab 2: إضافة أصل جديد
+        # ===================================================================
+        with tab2:
+            st.markdown("#### ➕ إضافة أصل جديد")
+            
+            with st.form("add_asset_form_admin", clear_on_submit=True):
+                st.markdown("##### 📝 بيانات الأصل الجديد")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    asset_name = st.text_input(
+                        "اسم الأصل *",
+                        placeholder="مثال: عمارة 5، مستودع 3",
+                        help="اسم واضح ومميز للأصل"
+                    )
+                    
+                    asset_type = st.selectbox(
+                        "نوع الأصل *",
+                        ["عمارة", "مستودع", "أرض", "محطة وقود", "أخرى"],
+                        help="اختر نوع الأصل"
+                    )
+                
+                with col2:
+                    asset_location = st.text_input(
+                        "الموقع",
+                        placeholder="مثال: حي الزهراء، شارع الملك",
+                        help="الموقع الجغرافي للأصل (اختياري)"
+                    )
+                
+                asset_description = st.text_area(
+                    "الوصف/ملاحظات",
+                    placeholder="معلومات إضافية عن الأصل...",
+                    height=100,
+                    help="أي تفاصيل إضافية عن الأصل"
+                )
+                
+                st.markdown("---")
+                
+                submit_add = st.form_submit_button(
+                    "✅ إضافة الأصل",
+                    use_container_width=True,
+                    type="primary"
+                )
+                
+                if submit_add:
+                    if not asset_name.strip():
+                        st.error("⚠️ اسم الأصل مطلوب")
+                    else:
+                        # التحقق من عدم التكرار
+                        existing_asset = session.query(Asset).filter_by(name=asset_name.strip()).first()
+                        
+                        if existing_asset:
+                            st.error(f"⚠️ الأصل '{asset_name}' موجود بالفعل")
+                        else:
+                            new_asset = Asset(
+                                name=asset_name.strip(),
+                                type=asset_type,
+                                location=asset_location.strip() if asset_location else None,
+                                description=asset_description.strip() if asset_description else None
+                            )
+                            session.add(new_asset)
+                            session.commit()
+                            st.success(f"✅ تم إضافة الأصل **{asset_name}** بنجاح!")
+                            st.balloons()
+                            st.rerun()
+
+        # ===================================================================
+        # Tab 3: تعديل/حذف أصل موجود (المدير فقط)
+        # ===================================================================
+        with tab3:
+            st.markdown("#### ✏️ تعديل أو حذف أصل موجود")
+            
+            if all_assets:
+                # اختيار الأصل
+                asset_names = [f"{a.name} ({a.type})" for a in all_assets]
+                selected_asset_label = st.selectbox(
+                    "🏢 اختر الأصل المراد تعديله أو حذفه",
+                    asset_names,
+                    key='edit_asset_select_admin'
+                )
+                
+                # العثور على الأصل المختار
+                selected_index = asset_names.index(selected_asset_label)
+                selected_asset = all_assets[selected_index]
+                
+                # عرض معلومات الأصل الحالية
+                with st.expander("📄 البيانات الحالية", expanded=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**الاسم:** {selected_asset.name}")
+                        st.write(f"**النوع:** {selected_asset.type}")
+                    with col2:
+                        st.write(f"**الموقع:** {selected_asset.location or '-'}")
+                        st.write(f"**الوصف:** {selected_asset.description or '-'}")
+                    
+                    # عرض إحصائيات الوحدات والعقود
+                    units_in_asset = session.query(Unit).filter_by(asset_id=selected_asset.id).all()
+                    units_count = len(units_in_asset)
+                    rented_count = sum(1 for u in units_in_asset if u.status == "مؤجر")
+                    
+                    # حساب العقود المرتبطة
+                    unit_ids = [str(u.id) for u in units_in_asset]
+                    contracts_linked = []
+                    if unit_ids:
+                        all_contracts = session.query(Contract).filter(Contract.status == "نشط").all()
+                        for contract in all_contracts:
+                            if contract.linked_units_ids:
+                                contract_unit_ids = contract.linked_units_ids.split(',')
+                                if any(uid in contract_unit_ids for uid in unit_ids):
+                                    contracts_linked.append(contract)
+                    
+                    col_stat1, col_stat2, col_stat3 = st.columns(3)
+                    with col_stat1:
+                        st.metric("عدد الوحدات", units_count)
+                    with col_stat2:
+                        st.metric("وحدات مؤجرة", rented_count)
+                    with col_stat3:
+                        st.metric("عقود نشطة", len(contracts_linked))
+            
+                st.markdown("---")
+                
+                # Tabs للتعديل والحذف
+                edit_tab, delete_tab = st.tabs(["✏️ تعديل البيانات", "🗑️ حذف الأصل"])
+                
+                # ===== Tab: تعديل البيانات =====
+                with edit_tab:
+                    with st.form("edit_asset_form_admin"):
+                        st.markdown("##### ✏️ تعديل البيانات")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            new_name = st.text_input(
+                                "اسم الأصل *",
+                                value=selected_asset.name,
+                                help="يمكن تعديل الاسم"
+                            )
+                            
+                            types_list = ["عمارة", "مستودع", "أرض", "محطة وقود", "أخرى"]
+                            current_type_index = types_list.index(selected_asset.type) if selected_asset.type in types_list else 0
+                            
+                            new_type = st.selectbox(
+                                "نوع الأصل *",
+                                types_list,
+                                index=current_type_index
+                            )
+                        
+                        with col2:
+                            new_location = st.text_input(
+                                "الموقع",
+                                value=selected_asset.location if selected_asset.location else "",
+                                placeholder="الموقع الجغرافي"
+                            )
+                        
+                        new_description = st.text_area(
+                            "الوصف/ملاحظات",
+                            value=selected_asset.description if selected_asset.description else "",
+                            height=100
+                        )
+                        
+                        if len(contracts_linked) > 0:
+                            st.warning(f"⚠️ تنبيه: هذا الأصل مرتبط بـ **{len(contracts_linked)}** عقد نشط. التعديلات ستؤثر على السجلات المرتبطة.")
+                        
+                        st.markdown("---")
+                        
+                        submit_edit = st.form_submit_button(
+                            "💾 حفظ التعديلات",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                        
+                        if submit_edit:
+                            if not new_name.strip():
+                                st.error("⚠️ اسم الأصل مطلوب")
+                            else:
+                                # التحقق من عدم تكرار الاسم
+                                existing = session.query(Asset).filter(
+                                    Asset.name == new_name.strip(),
+                                    Asset.id != selected_asset.id
+                                ).first()
+                                
+                                if existing:
+                                    st.error(f"⚠️ الاسم '{new_name}' مستخدم بالفعل لأصل آخر")
+                                else:
+                                    selected_asset.name = new_name.strip()
+                                    selected_asset.type = new_type
+                                    selected_asset.location = new_location.strip() if new_location else None
+                                    selected_asset.description = new_description.strip() if new_description else None
+                                    
+                                    session.commit()
+                                    st.success(f"✅ تم تحديث الأصل **{new_name}** بنجاح!")
+                                    st.rerun()
+                
+                # ===== Tab: حذف الأصل =====
+                with delete_tab:
+                    st.markdown("### 🗑️ حذف الأصل نهائياً")
+                    
+                    # عرض تحذيرات بناءً على الارتباطات
+                    can_delete = True
+                    
+                    if len(contracts_linked) > 0:
+                        can_delete = False
+                        st.error(f"🚫 **لا يمكن حذف هذا الأصل!**")
+                        st.error(f"السبب: يوجد **{len(contracts_linked)}** عقد نشط مرتبط بوحدات في هذا الأصل")
+                        
+                        with st.expander("📋 عرض العقود المرتبطة"):
+                            for contract in contracts_linked:
+                                st.write(f"- عقد #{contract.contract_number or contract.id} - {contract.tenant.name} ({contract.contract_type})")
+                        
+                        st.info("💡 **للحذف:** يجب أولاً إلغاء جميع العقود المرتبطة من صفحة 'إلغاء عقد'")
+                    
+                    elif units_count > 0:
+                        st.warning(f"⚠️ هذا الأصل يحتوي على **{units_count}** وحدة")
+                        
+                        delete_mode = st.radio(
+                            "اختر طريقة الحذف:",
+                            [
+                                "حذف الأصل فقط (الوحدات ستبقى بدون أصل)",
+                                "حذف الأصل وجميع الوحدات معاً"
+                            ],
+                            key='delete_mode_asset'
+                        )
+                        
+                        if delete_mode == "حذف الأصل وجميع الوحدات معاً":
+                            st.error("⚠️ **تحذير خطير:** سيتم حذف الأصل و**جميع الوحدات** المرتبطة به نهائياً!")
+                        else:
+                            st.info("ℹ️ الوحدات ستبقى في النظام ولكن بدون أصل مرتبط")
+                    else:
+                        st.success("✅ هذا الأصل لا يحتوي على وحدات ويمكن حذفه بأمان")
+                        delete_mode = "حذف الأصل فقط" # Default value when no units
+                    
+                    if can_delete:
+                        st.markdown("---")
+                        st.markdown("### ⚠️ تأكيد الحذف")
+                        
+                        st.markdown(f"""
+                        <div style="background-color: #3d1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4444;">
+                            <h4 style="color: #ff6b6b; margin-top: 0;">⚠️ تحذير نهائي</h4>
+                            <p>أنت على وشك حذف الأصل: <strong>{selected_asset.name}</strong></p>
+                            <p>هذا الإجراء <strong>لا يمكن التراجع عنه!</strong></p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        
+                        # تأكيد الحذف
+                        confirm_text = st.text_input(
+                            f"للتأكيد، اكتب اسم الأصل: **{selected_asset.name}**",
+                            placeholder=selected_asset.name,
+                            key='confirm_delete_asset'
+                        )
+                        
+                        if confirm_text == selected_asset.name:
+                            st.success("✅ تم التأكيد - يمكنك الآن الضغط على زر الحذف")
+                            
+                            if st.button(
+                                "🗑️ حذف الأصل نهائياً",
+                                type="primary",
+                                use_container_width=True,
+                                key='final_delete_asset_btn'
+                            ):
+                                try:
+                                    # حذف الوحدات إذا اختار المستخدم ذلك
+                                    if units_count > 0 and delete_mode == "حذف الأصل وجميع الوحدات معاً":
+                                        for unit in units_in_asset:
+                                            session.delete(unit)
+                                        st.info(f"🗑️ تم حذف {units_count} وحدة")
+                                    
+                                    # حذف الأصل
+                                    asset_name_deleted = selected_asset.name
+                                    session.delete(selected_asset)
+                                    session.commit()
+                                    
+                                    st.success(f"✅ تم حذف الأصل **{asset_name_deleted}** بنجاح!")
+                                    st.balloons()
+                                    st.rerun()
+                                    
+                                except Exception as e:
+                                    session.rollback()
+                                    st.error(f"❌ حدث خطأ أثناء الحذف: {str(e)}")
+                        else:
+                            st.warning("⚠️ يرجى كتابة اسم الأصل بشكل صحيح للتأكيد")
+            else:
+                st.info("لا توجد أصول لتعديلها أو حذفها")
+
+    # =========================================================================
+    # للموظف: عرض + إضافة فقط
+    # =========================================================================
+    elif st.session_state.get('user_role') == 'Employee':
+        st.subheader("➕ إدارة الأصول (موظف)")
+        st.info("ℹ️ كموظف، يمكنك عرض وإضافة أصول جديدة فقط. للتعديل أو الحذف، تواصل مع المدير.")
+        
+        # Tabs للموظف (عرض + إضافة فقط)
+        tab1, tab2 = st.tabs(["📋 عرض الأصول", "➕ إضافة أصل جديد"])
+        
+        # ===================================================================
+        # Tab 1: عرض الأصول
+        # ===================================================================
+        with tab1:
+            st.markdown("#### 📋 قائمة الأصول المسجلة")
+            
+            if all_assets:
+                assets_display = []
+                for asset in all_assets:
+                    units_count = session.query(Unit).filter_by(asset_id=asset.id).count()
+                    rented_count = session.query(Unit).filter_by(asset_id=asset.id, status="مؤجر").count()
+                    
+                    assets_display.append({
+                        'ID': asset.id,
+                        'اسم الأصل': asset.name,
+                        'النوع': asset.type,
+                        'الموقع': asset.location or '-',
+                        'عدد الوحدات': units_count,
+                        'الوحدات المؤجرة': rented_count
+                    })
+                
+                assets_df = pd.DataFrame(assets_display)
+                st.dataframe(assets_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("لا توجد أصول مسجلة حالياً")
+        
+        # ===================================================================
+        # Tab 2: إضافة أصل جديد
+        # ===================================================================
+        with tab2:
+            st.markdown("#### ➕ إضافة أصل جديد")
+            
+            with st.form("add_asset_form_employee", clear_on_submit=True):
+                st.markdown("##### 📝 بيانات الأصل الجديد")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    asset_name = st.text_input(
+                        "اسم الأصل *",
+                        placeholder="مثال: عمارة 5، مستودع 3",
+                        help="اسم واضح ومميز للأصل"
+                    )
+                    
+                    asset_type = st.selectbox(
+                        "نوع الأصل *",
+                        ["عمارة", "مستودع", "أرض", "محطة وقود", "أخرى"],
+                        help="اختر نوع الأصل",
+                        key="asset_type_emp"
+                    )
+                
+                with col2:
+                    asset_location = st.text_input(
+                        "الموقع",
+                        placeholder="مثال: حي الزهراء، شارع الملك",
+                        help="الموقع الجغرافي للأصل (اختياري)"
+                    )
+                
+                asset_description = st.text_area(
+                    "الوصف/ملاحظات",
+                    placeholder="معلومات إضافية عن الأصل...",
+                    height=100,
+                    help="أي تفاصيل إضافية عن الأصل"
+                )
+                
+                st.markdown("---")
+                
+                submit_add = st.form_submit_button(
+                    "✅ إضافة الأصل",
+                    use_container_width=True,
+                    type="primary"
+                )
+                
+                if submit_add:
+                    if not asset_name.strip():
+                        st.error("⚠️ اسم الأصل مطلوب")
+                    else:
+                        # التحقق من عدم التكرار
+                        existing_asset = session.query(Asset).filter_by(name=asset_name.strip()).first()
+                        
+                        if existing_asset:
+                            st.error(f"⚠️ الأصل '{asset_name}' موجود بالفعل")
+                        else:
+                            new_asset = Asset(
+                                name=asset_name.strip(),
+                                type=asset_type,
+                                location=asset_location.strip() if asset_location else None,
+                                description=asset_description.strip() if asset_description else None
+                            )
+                            session.add(new_asset)
+                            session.commit()
+                            st.success(f"✅ تم إضافة الأصل **{asset_name}** بنجاح!")
+                            st.balloons()
+                            st.rerun()
 # ==========================================
 
 def main():
@@ -2096,9 +2996,11 @@ def main():
             if role == 'Admin':
                 pages = {
                     "لوحة المؤشرات": dashboard,
-                    "إدارة الأصول والوحدات": manage_assets,
+                    "إدارة الأصول": manage_assets_only,  # ← جديد
+                    "إدارة الوحدات": manage_assets,
                     "إدارة المستأجرين": manage_tenants,
                     "إدارة العقود": manage_contracts,
+                    "إلغاء عقد": cancel_contract_page,
                     "إدارة الدفعات": manage_payments,
                     "التقارير": reports_page,
                     "الإعدادات": settings_page
@@ -2106,7 +3008,8 @@ def main():
             else: # Employee role
                 pages = {
                     "لوحة المؤشرات": dashboard,
-                    "إدارة الأصول والوحدات": manage_assets,
+                    "إدارة الأصول": manage_assets_only,  # ← جديد (عرض فقط)
+                    "إدارة الوحدات": manage_assets,
                     "إدارة المستأجرين": manage_tenants,
                     "إدارة العقود": manage_contracts,
                     "إدارة الدفعات": manage_payments,
