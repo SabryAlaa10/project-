@@ -2980,6 +2980,504 @@ def manage_assets_only():
                             st.rerun()
 # ==========================================
 
+#=================================================================
+#📦 نظام النسخ الاحتياطي الكامل - جاهز للاستخدام
+#=================================================================
+
+
+import os
+import shutil
+from datetime import datetime
+import streamlit as st
+import pandas as pd
+import base64
+
+# ============================================================
+# 1️⃣ دالة النسخ الاحتياطي
+# ============================================================
+
+def create_backup():
+    """
+    إنشاء نسخة احتياطية من قاعدة البيانات
+    
+    Returns:
+        tuple: (success: bool, file_path: str, message: str)
+    """
+    try:
+        # المسار الأصلي لقاعدة البيانات
+        source_db = "real_estate_v2.db"
+        
+        # التحقق من وجود الملف
+        if not os.path.exists(source_db):
+            return False, None, "❌ لم يتم العثور على قاعدة البيانات!"
+        
+        # مجلد النسخ الاحتياطية المؤقت
+        backup_dir = "temp_backups"
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # اسم الملف مع التاريخ والوقت
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"نسخة_احتياطية_{timestamp}.db"
+        backup_path = os.path.join(backup_dir, backup_filename)
+        
+        # نسخ الملف
+        shutil.copy2(source_db, backup_path)
+        
+        # حساب حجم الملف
+        file_size = os.path.getsize(backup_path)
+        file_size_mb = file_size / (1024 * 1024)
+        
+        return True, backup_path, f"✅ تم إنشاء النسخة بنجاح ({file_size_mb:.2f} MB)"
+        
+    except Exception as e:
+        return False, None, f"❌ حدث خطأ: {str(e)}"
+
+
+# ============================================================
+# 2️⃣ دالة استرجاع النسخة الاحتياطية
+# ============================================================
+
+def restore_backup(uploaded_file):
+    """
+    استرجاع قاعدة البيانات من ملف محمّل
+    
+    Args:
+        uploaded_file: الملف المرفوع من st.file_uploader
+        
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    try:
+        # اسم قاعدة البيانات الحالية
+        db_file = "real_estate_v2.db"
+        
+        # حفظ نسخة احتياطية من القاعدة الحالية قبل الاستبدال
+        if os.path.exists(db_file):
+            backup_current = f"{db_file}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            shutil.copy2(db_file, backup_current)
+        
+        # كتابة الملف الجديد
+        with open(db_file, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        return True, "✅ تم استرجاع النسخة الاحتياطية بنجاح!"
+        
+    except Exception as e:
+        return False, f"❌ حدث خطأ أثناء الاسترجاع: {str(e)}"
+
+
+# ============================================================
+# 3️⃣ دالة الحصول على معلومات قاعدة البيانات
+# ============================================================
+
+def get_database_info():
+    """
+    الحصول على معلومات وإحصائيات قاعدة البيانات
+    
+    Returns:
+        dict: معلومات قاعدة البيانات
+    """
+    try:
+        info = {}
+        
+        # حجم الملف
+        if os.path.exists("real_estate_v2.db"):
+            db_size = os.path.getsize("real_estate_v2.db")
+            info['size_bytes'] = db_size
+            info['size_mb'] = db_size / (1024 * 1024)
+            info['size_kb'] = db_size / 1024
+        else:
+            info['size_bytes'] = 0
+            info['size_mb'] = 0
+            info['size_kb'] = 0
+        
+        # عدد السجلات
+        info['total_assets'] = session.query(Asset).count()
+        info['total_units'] = session.query(Unit).count()
+        info['total_tenants'] = session.query(Tenant).count()
+        info['total_contracts'] = session.query(Contract).count()
+        info['total_payments'] = session.query(Payment).count()
+        info['total_records'] = (
+            info['total_assets'] + 
+            info['total_units'] + 
+            info['total_tenants'] + 
+            info['total_contracts'] + 
+            info['total_payments']
+        )
+        
+        # تاريخ آخر تعديل
+        if os.path.exists("real_estate_v2.db"):
+            mod_time = os.path.getmtime("real_estate_v2.db")
+            info['last_modified'] = datetime.fromtimestamp(mod_time)
+        else:
+            info['last_modified'] = None
+        
+        return info
+        
+    except Exception as e:
+        st.error(f"خطأ في الحصول على معلومات قاعدة البيانات: {str(e)}")
+        return {}
+
+
+# ============================================================
+# 4️⃣ دالة تصدير البيانات إلى Excel (نسخة احتياطية إضافية)
+# ============================================================
+
+def export_to_excel():
+    """
+    تصدير جميع البيانات إلى ملف Excel (نسخة احتياطية قابلة للقراءة)
+    
+    Returns:
+        tuple: (success: bool, file_path: str, message: str)
+    """
+    try:
+        # إنشاء مجلد مؤقت
+        export_dir = "temp_exports"
+        os.makedirs(export_dir, exist_ok=True)
+        
+        # اسم الملف
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        excel_filename = f"تصدير_البيانات_{timestamp}.xlsx"
+        excel_path = os.path.join(export_dir, excel_filename)
+        
+        # جلب البيانات
+        assets_df = pd.read_sql(session.query(Asset).statement, session.bind)
+        units_df = pd.read_sql(session.query(Unit).statement, session.bind)
+        tenants_df = pd.read_sql(session.query(Tenant).statement, session.bind)
+        contracts_df = pd.read_sql(session.query(Contract).statement, session.bind)
+        payments_df = pd.read_sql(session.query(Payment).statement, session.bind)
+        
+        # كتابة إلى Excel
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            assets_df.to_excel(writer, sheet_name='الأصول', index=False)
+            units_df.to_excel(writer, sheet_name='الوحدات', index=False)
+            tenants_df.to_excel(writer, sheet_name='المستأجرين', index=False)
+            contracts_df.to_excel(writer, sheet_name='العقود', index=False)
+            payments_df.to_excel(writer, sheet_name='الدفعات', index=False)
+        
+        return True, excel_path, "✅ تم التصدير بنجاح"
+        
+    except Exception as e:
+        return False, None, f"❌ حدث خطأ: {str(e)}"
+
+
+# ============================================================
+# 5️⃣ صفحة إدارة النسخ الاحتياطية (الواجهة الكاملة)
+# ============================================================
+
+def backup_page():
+    """صفحة إدارة النسخ الاحتياطية - الواجهة الرئيسية"""
+    
+    st.header("💾 إدارة النسخ الاحتياطية")
+    
+    # التحقق من الصلاحيات
+    if st.session_state.get('user_role') != 'Admin':
+        st.error("⚠️ هذه الصفحة متاحة للمدير فقط")
+        return
+    
+    # رسالة تحذيرية مهمة
+    st.markdown("""
+    <div style="background-color: #3d1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4444; margin-bottom: 20px;">
+            <strong style="color: #ffd700;">⭐ احفظ نسخة احتياطية كل أسبوع على الأقل!</strong>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # الحصول على معلومات قاعدة البيانات
+    db_info = get_database_info()
+    
+    # عرض إحصائيات قاعدة البيانات
+    st.markdown("---")
+    st.subheader("📊 معلومات قاعدة البيانات")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "📦 حجم قاعدة البيانات",
+            f"{db_info.get('size_mb', 0):.2f} MB",
+            help=f"{db_info.get('size_kb', 0):.0f} KB"
+        )
+    
+    with col2:
+        st.metric(
+            "📝 إجمالي السجلات",
+            f"{db_info.get('total_records', 0):,}",
+            help="مجموع كل السجلات في النظام"
+        )
+    
+    with col3:
+        st.metric("🏢 الأصول", db_info.get('total_assets', 0))
+    
+    with col4:
+        st.metric("👥 المستأجرين", db_info.get('total_tenants', 0))
+    
+    # صف ثاني من الإحصائيات
+    col5, col6, col7, col8 = st.columns(4)
+    
+    with col5:
+        st.metric("🏠 الوحدات", db_info.get('total_units', 0))
+    
+    with col6:
+        st.metric("📄 العقود", db_info.get('total_contracts', 0))
+    
+    with col7:
+        st.metric("💰 الدفعات", db_info.get('total_payments', 0))
+    
+    with col8:
+        if db_info.get('last_modified'):
+            last_mod = db_info['last_modified'].strftime('%Y-%m-%d')
+            st.metric("📅 آخر تعديل", last_mod)
+    
+    # =========================================================================
+    # قسم 1: حفظ نسخة احتياطية
+    # =========================================================================
+    st.markdown("---")
+    st.subheader("📤 حفظ نسخة احتياطية")
+    
+    st.info("""
+    💡 **كيفية الحفظ:**
+    1. اضغط على زر "تحميل نسخة احتياطية"
+    2. سيتم تنزيل ملف `.db` على جهازك
+    3. احفظ الملف في مكان آمن (Google Drive، OneDrive، أو جهازك)
+    4. كرر العملية كل أسبوع أو عند إجراء تغييرات مهمة
+    """)
+    
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        # زر تحميل نسخة احتياطية (قاعدة بيانات)
+        if st.button(
+            "📥 تحميل نسخة احتياطية (Database)", 
+            type="primary", 
+            use_container_width=True,
+            help="حفظ ملف قاعدة البيانات الكامل"
+        ):
+            with st.spinner("جاري إنشاء النسخة الاحتياطية..."):
+                success, backup_path, message = create_backup()
+                
+                if success:
+                    # قراءة الملف لتحميله
+                    with open(backup_path, "rb") as f:
+                        file_data = f.read()
+                    
+                    # زر التحميل
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                    st.download_button(
+                        label="⬇️ اضغط هنا لتحميل الملف",
+                        data=file_data,
+                        file_name=f"نسخة_احتياطية_{timestamp}.db",
+                        mime="application/octet-stream",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                    
+                    st.success(message)
+                    st.balloons()
+                    
+                    # حذف الملف المؤقت بعد التحميل
+                    try:
+                        os.remove(backup_path)
+                    except:
+                        pass
+                else:
+                    st.error(message)
+    
+    with col_btn2:
+        # زر تصدير إلى Excel
+        if st.button(
+            "📊 تصدير إلى Excel",
+            use_container_width=True,
+            help="تصدير البيانات في ملف Excel قابل للقراءة"
+        ):
+            with st.spinner("جاري تصدير البيانات..."):
+                success, excel_path, message = export_to_excel()
+                
+                if success:
+                    with open(excel_path, "rb") as f:
+                        excel_data = f.read()
+                    
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                    st.download_button(
+                        label="⬇️ اضغط هنا لتحميل ملف Excel",
+                        data=excel_data,
+                        file_name=f"تصدير_البيانات_{timestamp}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                    
+                    st.success(message)
+                    
+                    # حذف الملف المؤقت
+                    try:
+                        os.remove(excel_path)
+                    except:
+                        pass
+                else:
+                    st.error(message)
+    
+    # =========================================================================
+    # قسم 2: استرجاع نسخة احتياطية
+    # =========================================================================
+    st.markdown("---")
+    st.subheader("📥 استرجاع نسخة احتياطية")
+    
+    st.warning("""
+    ⚠️ **تحذير مهم:**
+    - سيتم **استبدال جميع البيانات الحالية** بالنسخة المحملة
+    - تأكد من حفظ نسخة من البيانات الحالية قبل الاسترجاع
+    - استخدم هذه الميزة فقط عند الضرورة
+    """)
+    
+    uploaded_file = st.file_uploader(
+        "📁 اختر ملف النسخة الاحتياطية (.db)",
+        type=['db'],
+        help="ارفع ملف قاعدة البيانات الذي حفظته سابقاً",
+        key='backup_uploader'
+    )
+    
+    if uploaded_file:
+        # عرض معلومات الملف المحمل
+        st.markdown("---")
+        st.markdown("### 📋 معلومات الملف المحمل")
+        
+        col_info1, col_info2, col_info3 = st.columns(3)
+        
+        with col_info1:
+            st.info(f"📄 **الاسم:** {uploaded_file.name}")
+        
+        with col_info2:
+            file_size_mb = uploaded_file.size / (1024 * 1024)
+            st.info(f"📊 **الحجم:** {file_size_mb:.2f} MB")
+        
+        with col_info3:
+            st.info(f"📦 **النوع:** Database File")
+        
+        st.markdown("---")
+        
+        # خطوات التأكيد
+        st.markdown("### ⚠️ تأكيد الاسترجاع")
+        
+        # Checkbox للتأكيد الأول
+        confirm_1 = st.checkbox(
+            "✅ أؤكد أنني حفظت نسخة احتياطية من البيانات الحالية",
+            key='confirm_backup_1'
+        )
+        
+        # Checkbox للتأكيد الثاني
+        confirm_2 = st.checkbox(
+            "✅ أؤكد استرجاع النسخة الاحتياطية واستبدال جميع البيانات الحالية",
+            key='confirm_backup_2',
+            disabled=not confirm_1
+        )
+        
+        # زر الاسترجاع
+        if confirm_1 and confirm_2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            col_restore1, col_restore2, col_restore3 = st.columns([1, 2, 1])
+            
+            with col_restore2:
+                if st.button(
+                    "🔄 استرجاع النسخة الآن",
+                    type="primary",
+                    use_container_width=True,
+                    key='restore_btn'
+                ):
+                    with st.spinner("⏳ جاري استرجاع النسخة الاحتياطية..."):
+                        success, message = restore_backup(uploaded_file)
+                        
+                        if success:
+                            st.success(message)
+                            st.balloons()
+                            
+                            st.markdown("---")
+                            st.info("""
+                            ℹ️ **الخطوات التالية:**
+                            1. انتظر 5 ثواني
+                            2. سيتم تحديث الصفحة تلقائياً
+                            3. سجل دخول مرة أخرى للتأكد من التغييرات
+                            """)
+                            
+                            # إعادة تحميل الصفحة بعد 5 ثواني
+                            import time
+                            time.sleep(5)
+                            st.rerun()
+                        else:
+                            st.error(message)
+        else:
+            st.warning("⚠️ يرجى تأكيد كلا الخيارين أعلاه لتفعيل زر الاسترجاع")
+    
+    # =========================================================================
+    # قسم 3: نصائح وإرشادات
+    # =========================================================================
+    st.markdown("---")
+    st.subheader("💡 نصائح مهمة")
+    
+    with st.expander("📚 كيفية حفظ النسخ الاحتياطية بشكل صحيح", expanded=False):
+        st.markdown("""
+        ### ✅ أفضل الممارسات:
+        
+        1. **التكرار:**
+           - احفظ نسخة احتياطية **كل أسبوع** على الأقل
+            - بعد إضافة عقود جديدة مهمة
+            - قبل أي تحديث للنظام
+        
+        2. **التخزين:**
+           - احفظ في **3 أماكن مختلفة**:
+            - 📱 Google Drive
+            - 💻 جهازك المحلي
+            - ☁️ OneDrive أو Dropbox
+        
+        3. **التسمية:**
+            - استخدم أسماء واضحة مثل:
+            - `نسخة_احتياطية_2024-01-15.db`
+            - `backup_before_update.db`
+        
+        4. **الاختبار:**
+            - جرب استرجاع النسخة كل شهر للتأكد من صلاحيتها
+        
+        ### ⚠️ تحذيرات:
+        
+        - ❌ لا تحذف النسخ القديمة - احتفظ بآخر 5 نسخ على الأقل
+        - ❌ لا تعتمد على مكان واحد فقط للحفظ
+        - ❌ لا تنسى حفظ نسخة قبل أي تحديث كبير
+        """)
+    
+    with st.expander("🔧 استكشاف الأخطاء وحلها", expanded=False):
+        st.markdown("""
+        ### مشاكل شائعة وحلولها:
+        
+        **1. "لم يتم العثور على قاعدة البيانات"**
+        - الحل: تأكد من وجود ملف `real_estate_v2.db` في مجلد التطبيق
+        
+        **2. "حدث خطأ أثناء الاسترجاع"**
+        - الحل: تأكد من أن الملف المحمل هو نسخة احتياطية صحيحة (.db)
+        - جرب تحميل الملف مرة أخرى
+        
+        **3. "البيانات ضاعت بعد التحديث"**
+        - الحل: استرجع آخر نسخة احتياطية من صفحة "النسخ الاحتياطي"
+        
+        **4. "الملف كبير جداً"**
+        - الحل: صدّر البيانات إلى Excel وحمّل الملفات القديمة
+        """)
+    
+    with st.expander("📅 جدول النسخ الاحتياطي الموصى به", expanded=False):
+        st.markdown("""
+        | الفترة | الإجراء | الأولوية |
+        |--------|---------|---------|
+        | **يومياً** | إذا كان هناك إدخال بيانات كثير | 🟡 متوسطة |
+        | **أسبوعياً** | نسخة احتياطية روتينية | 🟢 عالية |
+        | **شهرياً** | نسخة احتياطية كاملة مع اختبار | 🔴 حرجة |
+        | **قبل التحديثات** | نسخة احتياطية إلزامية | 🔴 حرجة |
+        | **بعد عقود مهمة** | نسخة احتياطية فورية | 🟢 عالية |
+        """)
+
+
+# ============================================================
+# 6️⃣ إضافة الصفحة للقائمة الرئيسية
+# ============================================================
+
 def main():
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
@@ -3003,6 +3501,7 @@ def main():
                     "إلغاء عقد": cancel_contract_page,
                     "إدارة الدفعات": manage_payments,
                     "التقارير": reports_page,
+                    "💾 النسخ الاحتياطي": backup_page,
                     "الإعدادات": settings_page
                 }
             else: # Employee role
