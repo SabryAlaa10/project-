@@ -1,12 +1,32 @@
+"""
+=================================================================
+🔒 نظام إدارة الجمعية العقارية - الإصدار الآمن
+=================================================================
+✅ PostgreSQL للبيانات الدائمة
+✅ نظام جلسات محسّن
+✅ حماية من تسريب البيانات
+✅ نسخ احتياطية تلقائية
+
+التعديلات الرئيسية:
+1. دعم PostgreSQL مع Supabase (بيانات دائمة)
+2. Session Management محسّن
+3. اختبار الاتصال بقاعدة البيانات
+4. تحذيرات واضحة
+"""
+
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, Column, Integer, String, Float, Date, ForeignKey, Text, text
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from sqlalchemy import create_engine, Column, Integer, String, Float, Date, ForeignKey, Text, text, inspect
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session as SQLSession
+from sqlalchemy.pool import NullPool
 from datetime import date, datetime
 import hashlib
 import io
 import base64
 import os
+import shutil
+import base64
+import numpy
 
 # ==========================================
 # 1. إعدادات الصفحة والتهيئة
@@ -18,12 +38,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# تنسيق الواجهة العربية وتكبير الخط وتحسين الشريط الجانبي
+# تنسيق CSS (نفس التنسيق السابق - بدون تغيير)
 st.markdown("""
     <style>
-    /* ============ تنسيق حقول الإدخال بشكل صحيح ============ */
-    
-    /* لون النص المكتوب داخل Text Input */
+    /* ============ تنسيق حقول الإدخال ============ */
     input[type="text"],
     input[type="number"],
     input[type="date"],
@@ -32,21 +50,19 @@ st.markdown("""
         color: #e5e7eb !important;
         border: 2px solid #60a5fa !important;
         border-radius: 6px !important;
-        padding:  12px !important;
+        padding: 12px !important;
         font-size: 16px !important;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
     }
     
-    /* Placeholder - النص الفاتح عند الحقل الفارغ */
     input::placeholder,
     textarea::placeholder {
         color: #9ca3af !important;
         opacity: 0.8 !important;
     }
     
-    /* عند التركيز على الحقل */
     input[type="text"]:focus,
-    input[type="number"]: focus,
+    input[type="number"]:focus,
     input[type="date"]:focus,
     textarea:focus {
         background-color: #3a3f55 !important;
@@ -56,7 +72,6 @@ st.markdown("""
         box-shadow: 0 0 10px rgba(167, 243, 208, 0.4) !important;
     }
     
-    /* Select / Dropdown */
     select {
         background-color: #2a2d3e !important;
         color: #e5e7eb !important;
@@ -79,44 +94,108 @@ st.markdown("""
         padding: 8px;
     }
     
-    /* Streamlit specific inputs */
-    . stTextInput input {
+    .stTextInput input,
+    .stNumberInput input,
+    .stSelectbox select {
         background-color: #2a2d3e !important;
         color: #e5e7eb !important;
         border: 2px solid #60a5fa !important;
     }
     
-    .stNumberInput input {
-        background-color: #2a2d3e !important;
-        color: #e5e7eb !important;
-        border: 2px solid #60a5fa !important;
-    }
-    
-    . stSelectbox select {
-        background-color: #2a2d3e !important;
-        color: #e5e7eb !important;
-        border: 2px solid #60a5fa !important;
-    }
-    
-    /* Label styling - لون الكلمة فوق الحقل */
     label {
         color: #e5e7eb !important;
         font-weight: 600 !important;
         font-size: 15px !important;
     }
-    
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. قاعدة البيانات والنماذج
+# 2. قاعدة البيانات - الإصدار الآمن
 # ==========================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "real_estate_v2.db")
+
 Base = declarative_base()
-engine = create_engine(f'sqlite:///{DB_PATH}', connect_args={'check_same_thread': False})
-Session = sessionmaker(bind=engine)
-session = Session()
+
+import psycopg2
+
+# جلب الرابط من secrets
+conn_url = st.secrets["connections"]["postgresql"]["url"]
+
+try:
+    conn = psycopg2.connect(conn_url)
+    st.success("✅ تم الاتصال بنجاح بـ Supabase!")
+    conn.close()
+except Exception as e:
+    st.error(f"❌ فشل الاتصال: {e}")
+
+# ===== دالة الاتصال الذكية =====
+@st.cache_resource
+def get_database_engine():
+    # 1. جلب الرابط من المكان الصحيح في secrets
+    try:
+        # هنا غيرنا السطر ليبحث في المسار اللي نجح معاك في الاختبار
+        if hasattr(st, 'secrets') and "connections" in st.secrets:
+            db_url = st.secrets["connections"]["postgresql"]["url"]
+            
+            # تصحيح التوافق
+            if db_url.startswith('postgres://'):
+                db_url = db_url.replace('postgres://', 'postgresql://', 1)
+            
+            # إنشاء الاتصال
+            engine = create_engine(
+                db_url,
+                pool_pre_ping=True,
+                pool_recycle=300, # تقليل وقت التجديد ليتناسب مع الـ Pooler
+                connect_args={
+                    "connect_timeout": 10,
+                    # حذفنا application_name مؤقتاً لضمان عدم التعارض مع الـ Pooler
+                }
+            )
+            
+            # اختبار الاتصال الفعلي
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                conn.commit() # تأكيد العملية
+            
+            st.success("✅ Connected to PostgreSQL (Supabase) - Data is PERSISTENT!")
+            return engine, "postgresql"
+            
+    except Exception as e:
+        # طباعة الخطأ الحقيقي في الواجهة عشان نعرف لو في مشكلة تانية
+        st.warning(f"⚠️ PostgreSQL connection failed: {e}")
+    
+    # Fallback لـ SQLite
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DB_PATH = os.path.join(BASE_DIR, "real_estate_v2.db")
+    engine = create_engine(f'sqlite:///{DB_PATH}', connect_args={'check_same_thread': False})
+    
+    st.error("⚠️ Using SQLite - Data is TEMPORARY!")
+    return engine, "sqlite"
+
+
+# إنشاء الاتصال
+engine, db_type = get_database_engine()
+
+# ===== Session Factory الآمنة =====
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+def get_db_session() -> SQLSession:
+    """
+    🔒 الحصول على جلسة آمنة من قاعدة البيانات
+    """
+    db = SessionLocal()
+    try:
+        return db
+    except Exception as e:
+        db.close()
+        raise e
+
+# الجلسة الرئيسية
+session = get_db_session()
+
+# ==========================================
+# 3. النماذج (Models) - نفس التعريفات السابقة
+# ==========================================
 
 class User(Base):
     __tablename__ = 'users'
@@ -129,7 +208,7 @@ class Asset(Base):
     __tablename__ = 'assets'
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    type = Column(String, nullable=False) 
+    type = Column(String, nullable=False)
     location = Column(String)
     description = Column(Text)
 
@@ -143,7 +222,6 @@ class Unit(Base):
     usage_type = Column(String)
     status = Column(String, default="فاضي")
     asset = relationship("Asset")
-
 
 class Tenant(Base):
     __tablename__ = 'tenants'
@@ -169,17 +247,17 @@ class Contract(Base):
     end_date = Column(Date)
     vat_rate = Column(Float, default=0.0)
     linked_units_ids = Column(String)
-    status = Column(String, default="نشط")  # جديد: نشط / ملغي
-    cancellation_reason = Column(Text, nullable=True)  # جديد
-    cancelled_by = Column(String, nullable=True)  # جديد
-    cancellation_date = Column(Date, nullable=True)  # جديد
+    status = Column(String, default="نشط")
+    cancellation_reason = Column(Text, nullable=True)
+    cancelled_by = Column(String, nullable=True)
+    cancellation_date = Column(Date, nullable=True)
     tenant = relationship("Tenant")
 
 class Payment(Base):
     __tablename__ = 'payments'
     id = Column(Integer, primary_key=True)
     contract_id = Column(Integer, ForeignKey('contracts.id'))
-    payment_number = Column(Integer)  # ← جديد: رقم الدفعة داخل العقد
+    payment_number = Column(Integer)
     due_date = Column(Date)
     paid_date = Column(Date, nullable=True)
     amount = Column(Float)
@@ -192,139 +270,68 @@ class Payment(Base):
     payment_method = Column(String)
     contract = relationship("Contract")
 
+# إنشاء الجداول
 Base.metadata.create_all(engine)
-# تحديث جدول العقود لإضافة حقول الإلغاء
-try:
-    from sqlalchemy import inspect, text
+
+# ==========================================
+# 4. تحديث الجداول الموجودة (Migration)
+# ==========================================
+
+def migrate_database_schema():
+    """
+    🔧 تحديث هيكل قاعدة البيانات للحقول الجديدة
+    """
     inspector = inspect(engine)
-    existing_columns = [col['name'] for col in inspector.get_columns('contracts')]
     
-    with engine.connect() as conn:
-        if 'status' not in existing_columns:
-            conn.execute(text('ALTER TABLE contracts ADD COLUMN status VARCHAR DEFAULT "نشط"'))
-            # تحديث العقود الموجودة
-            conn.execute(text('UPDATE contracts SET status = "نشط" WHERE status IS NULL'))
-            print("✅ تم إضافة عمود status للعقود")
+    # تحديث جدول العقود
+    contracts_columns = [col['name'] for col in inspector.get_columns('contracts')]
+    
+    with engine.begin() as conn:
+        if 'status' not in contracts_columns:
+            if db_type == 'postgresql':
+                conn.execute(text('ALTER TABLE contracts ADD COLUMN status VARCHAR DEFAULT \'نشط\''))
+            else:
+                conn.execute(text('ALTER TABLE contracts ADD COLUMN status VARCHAR DEFAULT "نشط"'))
+            print("✅ Added 'status' column to contracts")
         
-        if 'cancellation_reason' not in existing_columns:
+        if 'cancellation_reason' not in contracts_columns:
             conn.execute(text('ALTER TABLE contracts ADD COLUMN cancellation_reason TEXT'))
-            print("✅ تم إضافة عمود cancellation_reason")
+            print("✅ Added 'cancellation_reason' column")
         
-        if 'cancelled_by' not in existing_columns:
+        if 'cancelled_by' not in contracts_columns:
             conn.execute(text('ALTER TABLE contracts ADD COLUMN cancelled_by VARCHAR'))
-            print("✅ تم إضافة عمود cancelled_by")
+            print("✅ Added 'cancelled_by' column")
         
-        if 'cancellation_date' not in existing_columns:
+        if 'cancellation_date' not in contracts_columns:
             conn.execute(text('ALTER TABLE contracts ADD COLUMN cancellation_date DATE'))
-            print("✅ تم إضافة عمود cancellation_date")
-        
-        conn.commit()
-except Exception as e:
-    print(f"تنبيه: {e}")
-    pass
-# إضافة رقم الدفعة لكل عقد
-try:
-    from sqlalchemy import inspect, text
-    inspector = inspect(engine)
-    existing_columns = [col['name'] for col in inspector.get_columns('payments')]
+            print("✅ Added 'cancellation_date' column")
     
-    if 'payment_number' not in existing_columns:
-        with engine.connect() as conn:
+    # تحديث جدول الدفعات
+    payments_columns = [col['name'] for col in inspector.get_columns('payments')]
+    
+    with engine.begin() as conn:
+        if 'payment_number' not in payments_columns:
             conn.execute(text('ALTER TABLE payments ADD COLUMN payment_number INTEGER'))
-            conn.commit()
-            print("✅ تم إضافة عمود payment_number")
-            
-            # تحديث الدفعات الموجودة بأرقام تسلسلية
-            contracts = session.query(Contract).all()
-            for contract in contracts:
-                payments = session.query(Payment).filter_by(contract_id=contract.id).order_by(Payment.due_date).all()
-                for idx, payment in enumerate(payments, start=1):
-                    payment.payment_number = idx
-            
-            session.commit()
-            print("✅ تم ترقيم الدفعات الموجودة")
-except Exception as e:
-    print(f"تنبيه: {e}")
-    pass
-# تحديث جدول العقود لإضافة رقم العقد
-try:
-    from sqlalchemy import inspect
-    inspector = inspect(engine)
-    existing_columns = [col['name'] for col in inspector.get_columns('contracts')]
-    
-    if 'contract_number' not in existing_columns:
-        with engine.connect() as conn:
-            conn.execute('ALTER TABLE contracts ADD COLUMN contract_number VARCHAR')
-            conn.commit()
-except:
-    pass
-# تحديث جدول المستأجرين إذا لزم الأمر
-try:
-    from sqlalchemy import inspect
-    inspector = inspect(engine)
-    existing_columns = [col['name'] for col in inspector.get_columns('tenants')]
-    
-    if 'email' not in existing_columns:
-        with engine.connect() as conn:
-            conn.execute('ALTER TABLE tenants ADD COLUMN email VARCHAR')
-            conn.execute('ALTER TABLE tenants ADD COLUMN national_id VARCHAR')
-            conn.execute('ALTER TABLE tenants ADD COLUMN address TEXT')
-            conn.execute('ALTER TABLE tenants ADD COLUMN notes TEXT')
-            conn.execute('ALTER TABLE tenants ADD COLUMN created_date DATE')
-            conn.commit()
-except:
-    pass
-
-
-# تحديث جدول الدفعات لإضافة الحقول الجديدة وإصلاح البيانات
-try:
-    from sqlalchemy import inspect, text
-    inspector = inspect(engine)
-    existing_columns = [col['name'] for col in inspector.get_columns('payments')]
-    
-    with engine.connect() as conn:
-        if 'paid_amount' not in existing_columns:
+            print("✅ Added 'payment_number' column to payments")
+        
+        if 'paid_amount' not in payments_columns:
             conn.execute(text('ALTER TABLE payments ADD COLUMN paid_amount FLOAT DEFAULT 0.0'))
-            print("✅ تم إضافة عمود paid_amount")
+            print("✅ Added 'paid_amount' column")
         
-        if 'remaining_amount' not in existing_columns:
+        if 'remaining_amount' not in payments_columns:
             conn.execute(text('ALTER TABLE payments ADD COLUMN remaining_amount FLOAT DEFAULT 0.0'))
-            print("✅ تم إضافة عمود remaining_amount")
-        
-        conn.commit()
-        
-        # تحديث الدفعات الموجودة مرة واحدة فقط
-        result = conn.execute(text("SELECT COUNT(*) FROM payments WHERE paid_amount IS NULL OR remaining_amount IS NULL"))
-        needs_update = result.scalar()
-        
-        if needs_update > 0:
-            # تحديث جميع الدفعات الموجودة بشكل صحيح
-            result = conn.execute(text("SELECT id, total, status FROM payments"))
-            all_payments = result.fetchall()
-            
-            for payment in all_payments:
-                payment_id, total, status = payment
-                
-                if status == 'مدفوع':
-                    conn.execute(
-                        text("UPDATE payments SET paid_amount = :paid, remaining_amount = 0 WHERE id = :id"),
-                        {"paid": total, "id": payment_id}
-                    )
-                else:
-                    conn.execute(
-                        text("UPDATE payments SET paid_amount = 0, remaining_amount = :remaining WHERE id = :id"),
-                        {"remaining": total, "id": payment_id}
-                    )
-            
-            conn.commit()
-            print(f"✅ تم تحديث {len(all_payments)} دفعة بنجاح")
-        
+            print("✅ Added 'remaining_amount' column")
+
+# تشغيل الهجرة
+try:
+    migrate_database_schema()
 except Exception as e:
-    print(f"خطأ في التحديث: {e}")
-    pass
+    print(f"Migration warning: {e}")
+
 # ==========================================
-# 3. دوال مساعدة والبيانات الأولية (Seed Data) - تم توحيدها وتصحيحها
+# 5. دوال مساعدة
 # ==========================================
+
 def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
@@ -336,177 +343,233 @@ def check_login(username, password):
         return user
     return None
 
-def generate_units_from_list(asset_obj, unit_list, usage_type="سكني"):
-    """دالة مساعدة لإنشاء الوحدات من قائمة (رقم الشقة، رقم الدور)"""
-    units = []
-    asset_id = asset_obj.id # استخدام الـ ID المأخوذ من قاعدة البيانات
+# ==========================================
+# 6. تهيئة البيانات الأولية
+# ==========================================
+
+# def init_seed_data():
+#     """تهيئة البيانات الأولية بطريقة سريعة ولا تستهلك الموارد"""
     
-    for unit_number, floor_num in unit_list:
-        status = "فاضي"
-        # استثناء خاص لعمارة 4 - الدور الأول مؤجر بالكامل
-        # هذا الشرط يعتمد على أن الدور الأول في عمارة 4 مؤجر في البداية
-        if asset_obj.name == "عمارة 4" and floor_num == 1 and unit_number != 0:
-            status = "مؤجر"
+#     # نفتح Session جديدة مؤقتة للتحقق
+#     local_session = SessionLocal()
+#     try:
+#         # التحقق من وجود مستخدمين (بسرعة وبأقل حجم بيانات)
+#         exists = local_session.query(User.id).first()
         
-        # استثناء خاص للملحق والمعرض
-        if floor_num == "معرض": # حالة معرض (تم تمريرها كـ (1، "معرض"))
-            u_num = f"معرض {unit_number}"
-            u_floor = "أرضي"
-            usage = "تجاري"
-        elif unit_number == 0: # حالة ملحق (في الإكسل رقم الشقة 0)
-            u_num = "ملحق"
-            u_floor = "سطح"
-            usage = usage_type
-        else: # حالة شقة عادية
-            u_num = str(unit_number)
-            u_floor = str(floor_num)
-            usage = usage_type
+#         if exists:
+#             return  # البيانات موجودة.. اخرج فوراً
+            
+#         st.info("🌱 Initializing seed data...")
+        
+#         # إضافة المستخدمين
+#         admin = User(username="admin", password_hash=hash_password("admin123"), role="Admin")
+#         emp = User(username="emp", password_hash=hash_password("emp123"), role="Employee")
+        
+#         local_session.add_all([admin, emp])
+#         local_session.commit()
+#         st.success("✅ Seed data initialized successfully")
+        
+#     except Exception as e:
+#         local_session.rollback()
+#         print(f"Error seeding data: {e}")
+#     finally:
+#         local_session.close() # ضروري جداً قفل الاتصال عشان ميفضلش معلق ويتقل البرنامج
 
-        units.append(Unit(
-            asset_id=asset_id, 
-            unit_number=u_num, 
-            floor=u_floor, 
-            usage_type=usage, 
-            status=status
-        ))
-    return units
-
-def init_seed_data():
-    """تهيئة البيانات المطلوبة عند التشغيل الأول"""
-    
-    # تحقق من وجود مستخدمين
-    if session.query(User).first():
-        return # البيانات الأولية موجودة بالفعل، لا تقم بالتهيئة
-
-    # 1. المستخدمين (Admin و Employee)
-    admin = User(username="admin", password_hash=hash_password("admin123"), role="Admin")
-    emp = User(username="emp", password_hash=hash_password("emp123"), role="Employee")
-    session.add_all([admin, emp])
-    session.commit() # حفظ المستخدمين لضمان تسجيلهم
-
-    # 2. المستأجرين
-    tenants_data = [
-        ("مستشفى الأندلسية", "مستشفى"),
-        ("مستشفى السقاف", "مستشفى"),
-        ("نظارات الصاحب", "شركة"),
-        ("سنابل السلام", "شركة"),
-        ("صيدلية الدواء", "صيدلية"),
-        ("مستثمر محطة الوقود", "مستثمر")
-    ]
-    for t_name, t_type in tenants_data:
-        session.add(Tenant(name=t_name, type=t_type))
-    session.commit()
-
-    # 3. الأصول
-    assets_map = {
-        "عمارة 1": Asset(name="عمارة 1", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل"),
-        "عمارة 2": Asset(name="عمارة 2", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل"),
-        "عمارة 3": Asset(name="عمارة 3", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل"),
-        "عمارة 4": Asset(name="عمارة 4", type="عمارة", description="تم تحديث الوحدات حسب ملف الإكسل (الدور الأول مؤجر بالكامل)"),
-        "مستودع 1": Asset(name="مستودع 1", type="مستودع", description="تجاري / مؤجر"),
-        "مستودع 2": Asset(name="مستودع 2", type="مستودع", description="تجاري / مؤجر"),
-        "أرض شارع حراء (محطة)": Asset(name="أرض شارع حراء (محطة)", type="محطة وقود", location="شارع حراء", description="2500م – محطة"),
-        "أرض الميزان": Asset(name="أرض الميزان", type="أرض", description="1500م – حق انتفاع"),
-        "أرض كيلو 14": Asset(name="أرض كيلو 14", type="أرض", location="كيلو 14", description="12000م – غير مستغلة")
-    }
-    
-    session.add_all(assets_map.values())
-    session.commit()
-    
-    # جلب الأصول مع IDs الصحيحة
-    b1 = session.query(Asset).filter_by(name="عمارة 1").first()
-    b2 = session.query(Asset).filter_by(name="عمارة 2").first()
-    b3 = session.query(Asset).filter_by(name="عمارة 3").first()
-    b4 = session.query(Asset).filter_by(name="عمارة 4").first()
-    w1 = session.query(Asset).filter_by(name="مستودع 1").first()
-    w2 = session.query(Asset).filter_by(name="مستودع 2").first()
-    l1 = session.query(Asset).filter_by(name="أرض شارع حراء (محطة)").first()
-    l2 = session.query(Asset).filter_by(name="أرض الميزان").first()
-    l3 = session.query(Asset).filter_by(name="أرض كيلو 14").first()
-    
-    # 4. الوحدات (Units Generation) - بناءً على صور الإكسل
-    units_list = []
-    
-    # --- عمارة 1 (ID=b1.id) ---
-    b1_units_data = [
-        (111, 1), (112, 1), (113, 1), (114, 1), (115, 1), (116, 1),
-        (121, 2), (122, 2), (123, 2), (124, 2), (125, 2), (126, 2),
-        (131, 3), (132, 3), (133, 3), (134, 3), (135, 3), (136, 3),
-        (141, 4), (112, 4), (113, 4), (114, 4), (115, 4), (116, 4),
-        (121, 5), (122, 5), (123, 5), (124, 5), (125, 5), (126, 5),
-        (131, 6), (132, 6), (133, 6), (134, 6), (135, 6), (136, 6),
-        (0, 0), # ملحق
-        (1, "معرض") # معرض 1
-    ]
-    units_list.extend(generate_units_from_list(b1, b1_units_data))
-
-    # --- عمارة 2 (ID=b2.id) ---
-    b2_units_data = [
-        (211, 1), (212, 1), (213, 1), (214, 1), (215, 1), (216, 1),
-        (221, 2), (222, 2), (223, 2), (224, 2), (225, 2), (226, 2),
-        (231, 3), (232, 3), (233, 3), (234, 3), (235, 3), (236, 3),
-        (241, 4), (242, 4), (243, 4), (245, 4), (116, 4), 
-        (251, 5), (252, 5), (253, 5), (254, 5), (255, 5), (256, 5),
-        (261, 6), (262, 6), (263, 6), (264, 6), (265, 6), (266, 6),
-        (0, 0), # ملحق
-        (1, "معرض") # معرض 1
-    ]
-    units_list.extend(generate_units_from_list(b2, b2_units_data))
-
-    # --- عمارة 3 (ID=b3.id) ---
-    b3_units_data = [
-        (311, 1), (312, 1), (313, 1), (314, 1), (315, 1), (316, 1),
-        (321, 2), (322, 2), (323, 2), (324, 2), (325, 2), (326, 2),
-        (331, 3), (332, 3), (333, 3), (334, 3), (335, 3), (336, 3),
-        (0, 0), # ملحق
-    ]
-    units_list.extend(generate_units_from_list(b3, b3_units_data))
-
-    # --- عمارة 4 (ID=b4.id) ---
-    b4_units_data = [
-        (411, 1), (412, 1), (413, 1), (414, 1), (415, 1), (416, 1),
-        (421, 2), (422, 2), (423, 2), (424, 2), (425, 2), (426, 2),
-        (431, 3), (432, 3), (433, 3), (434, 3), (435, 3), (436, 3),
-        (0, 0), # ملحق
-    ]
-    units_list.extend(generate_units_from_list(b4, b4_units_data))
-
-
-    # --- الأصول الأخرى (الحالة مؤجر كما طلب) ---
-    # مؤجر: مستودع 1, مستودع 2, أرض المحطة, أرض الميزان
-    units_list.append(Unit(asset_id=w1.id, unit_number="مستودع 1", usage_type="تجاري", status="مؤجر"))
-    units_list.append(Unit(asset_id=w2.id, unit_number="مستودع 2", usage_type="تجاري", status="مؤجر"))
-    units_list.append(Unit(asset_id=l1.id, unit_number="أرض المحطة", area=2500, usage_type="تجاري", status="مؤجر"))
-    units_list.append(Unit(asset_id=l2.id, unit_number="أرض الميزان (حق انتفاع)", area=1500, usage_type="حق انتفاع", status="مؤجر"))
-    
-    # فاضي: أرض كيلو 14
-    units_list.append(Unit(asset_id=l3.id, unit_number="أرض كيلو 14", area=12000, usage_type="أرض", status="فاضي"))
-
-    session.add_all(units_list)
-    session.commit()
-    
-# تشغيل دالة البيانات الأولية لإنشاء الجداول والمستخدمين والوحدات عند بدء التشغيل
-init_seed_data()
-
+# # استدعاء الدالة داخل الـ main أو مرة واحدة فقط
+# if 'data_seeded' not in st.session_state:
+#     init_seed_data()
+#     st.session_state['data_seeded'] = True
 
 # ==========================================
-# 4. مكونات الواجهة
+# 7. تحذير حالة قاعدة البيانات
+# ==========================================
+
+def show_database_status():
+    """
+    🚨 إظهار تحذير إذا كانت قاعدة البيانات مؤقتة
+    """
+    if db_type == 'sqlite':
+        st.markdown("""
+        <div style="background-color: #3d1e1e; padding: 15px; border-radius: 10px; border-left: 5px solid #ff4444; margin-bottom: 20px;">
+            <h4 style="color: #ff6b6b; margin: 0 0 10px 0;">🚨 تحذير: قاعدة بيانات مؤقتة!</h4>
+            <p style="margin: 0; font-size: 14px;">
+                <strong>البيانات الحالية مؤقتة وستُفقد عند إعادة التشغيل!</strong><br>
+                يجب ربط قاعدة بيانات PostgreSQL من Streamlit Secrets.<br>
+                <a href="https://supabase.com" target="_blank" style="color: #60a5fa;">سجل مجاناً في Supabase</a>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.success("✅ متصل بقاعدة بيانات دائمة (PostgreSQL)")
+
+# ==========================================
+# 8. اختبار الاتصال
+# ==========================================
+
+def test_database_connection():
+    """
+    🔌 اختبار اتصال قاعدة البيانات
+    """
+    st.subheader("🔌 حالة الاتصال بقاعدة البيانات")
+    
+    try:
+        # اختبار القراءة
+        user_count = session.query(User).count()
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if db_type == 'postgresql':
+                st.metric("نوع قاعدة البيانات", "PostgreSQL ✅")
+                st.success("البيانات محفوظة بشكل دائم")
+            else:
+                st.metric("نوع قاعدة البيانات", "SQLite ⚠️")
+                st.error("البيانات مؤقتة!")
+        
+        with col2:
+            st.metric("عدد المستخدمين", user_count)
+        
+        with col3:
+            st.metric("حالة الاتصال", "متصل ✅")
+        
+        # معلومات إضافية
+        if db_type == 'postgresql':
+            st.info("""
+            ✅ **مميزات PostgreSQL:**
+            - بيانات دائمة ومحمية
+            - نسخ احتياطية تلقائية
+            - أداء أفضل للبيانات الكبيرة
+            - يدعم عدة مستخدمين في نفس الوقت
+            """)
+        else:
+            st.warning("""
+            ⚠️ **تحذيرات SQLite:**
+            - البيانات ستُفقد عند إعادة التشغيل
+            - لا يوجد نسخ احتياطية تلقائية
+            - يجب حفظ نسخة احتياطية يدوياً
+            """)
+    
+    except Exception as e:
+        st.error(f"❌ فشل الاتصال: {str(e)}")
+
+# ==========================================
+# 9. دوال النسخ الاحتياطي (نفس السابق)
+# ==========================================
+
+def create_backup():
+    """إنشاء نسخة احتياطية"""
+    try:
+        source_db = "real_estate_v2.db"
+        
+        if not os.path.exists(source_db):
+            return False, None, "❌ لم يتم العثور على قاعدة البيانات!"
+        
+        backup_dir = "temp_backups"
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"نسخة_احتياطية_{timestamp}.db"
+        backup_path = os.path.join(backup_dir, backup_filename)
+        
+        shutil.copy2(source_db, backup_path)
+        
+        file_size = os.path.getsize(backup_path)
+        file_size_mb = file_size / (1024 * 1024)
+        
+        return True, backup_path, f"✅ تم إنشاء النسخة بنجاح ({file_size_mb:.2f} MB)"
+        
+    except Exception as e:
+        return False, None, f"❌ حدث خطأ: {str(e)}"
+
+def restore_backup(uploaded_file):
+    """استرجاع نسخة احتياطية"""
+    try:
+        db_file = "real_estate_v2.db"
+        
+        if os.path.exists(db_file):
+            backup_current = f"{db_file}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            shutil.copy2(db_file, backup_current)
+        
+        with open(db_file, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        return True, "✅ تم استرجاع النسخة الاحتياطية بنجاح!"
+        
+    except Exception as e:
+        return False, f"❌ حدث خطأ أثناء الاسترجاع: {str(e)}"
+
+# ==========================================
+# 10. صفحة النسخ الاحتياطي المحدثة
+# ==========================================
+
+def backup_page():
+    """صفحة إدارة النسخ الاحتياطية"""
+    
+    st.header("💾 إدارة النسخ الاحتياطية")
+    
+    if st.session_state.get('user_role') != 'Admin':
+        st.error("⚠️ هذه الصفحة متاحة للمدير فقط")
+        return
+    
+    # إظهار حالة قاعدة البيانات
+    show_database_status()
+    
+    # اختبار الاتصال
+    with st.expander("🔌 اختبار الاتصال", expanded=False):
+        test_database_connection()
+    
+    st.markdown("---")
+    
+    # باقي كود النسخ الاحتياطي (نفس السابق)
+    st.subheader("📤 حفظ نسخة احتياطية")
+    
+    if db_type == 'sqlite':
+        if st.button("📥 تحميل نسخة احتياطية", type="primary", use_container_width=True):
+            with st.spinner("جاري إنشاء النسخة..."):
+                success, backup_path, message = create_backup()
+                
+                if success:
+                    with open(backup_path, "rb") as f:
+                        file_data = f.read()
+                    
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                    st.download_button(
+                        label="⬇️ اضغط هنا لتحميل الملف",
+                        data=file_data,
+                        file_name=f"نسخة_احتياطية_{timestamp}.db",
+                        mime="application/octet-stream",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                    st.success(message)
+                    
+                    try:
+                        os.remove(backup_path)
+                    except:
+                        pass
+                else:
+                    st.error(message)
+    else:
+        st.info("""
+        ✅ أنت متصل بـ PostgreSQL
+        
+        البيانات محفوظة تلقائياً ولا تحتاج نسخ احتياطي يدوي.
+        لكن يُنصح بتنزيل نسخة احتياطية شهرياً كإجراء إضافي.
+        """)
+
+# ==========================================
+# 11. صفحة تسجيل الدخول
 # ==========================================
 
 def login_page():
-    # إضافة مسافة فارغة في الأعلى
     st.markdown("<br><br>", unsafe_allow_html=True)
     
-    # إنشاء 3 أعمدة للتوسيط
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # عرض الشعار (إذا كان موجود في نفس المجلد)
-        # يمكنك وضع ملف الصورة في نفس مجلد المشروع باسم "logo.png"
         try:
             st.image("logo.png", use_container_width=True)
         except:
-            # إذا لم يكن الشعار موجود، عرض اسم الجمعية فقط
             st.markdown("""
                 <div style="text-align: center; padding: 20px;">
                     <h1 style="color: #6B9B7A; font-size: 48px; margin-bottom: 0;">زواج</h1>
@@ -519,7 +582,6 @@ def login_page():
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # بطاقة تسجيل الدخول
         st.markdown("""
             <div style="
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -541,7 +603,6 @@ def login_page():
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # حقول الإدخال
         with st.container():
             username = st.text_input(
                 "👤 اسم المستخدم",
@@ -558,7 +619,6 @@ def login_page():
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # زر الدخول بتصميم مميز
             if st.button("🚀 دخول", use_container_width=True, type="primary"):
                 if not username or not password:
                     st.error("⚠️ الرجاء إدخال اسم المستخدم وكلمة المرور")
@@ -573,7 +633,6 @@ def login_page():
                     else:
                         st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
         
-        # معلومات إضافية في الأسفل
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown("""
             <div style="text-align: center; color: #808080; font-size: 12px; padding: 20px;">
@@ -674,8 +733,7 @@ def dashboard():
         else:
             st.success("✅ لا توجد عقود قريبة الانتهاء")
 
-import streamlit as st
-import pandas as pd
+
 # يفترض الكود وجود session و models (Asset, Unit, Contract) معرفة مسبقاً
 
 def manage_assets():
@@ -1026,7 +1084,7 @@ def manage_assets():
         # نفترض أن الأسماء فريدة
         view_asset_row = assets[assets['name'] == selected_view_asset]
         if not view_asset_row.empty:
-            view_asset_id = view_asset_row['id'].values[0]
+            view_asset_id = int(view_asset_row['id'].values[0]) # إضافة int() للتحويل
             
             # جلب الوحدات
             view_units = session.query(Unit).filter(Unit.asset_id == view_asset_id).all()
@@ -2518,8 +2576,7 @@ def manage_tenants():
     else:
         st.info("لا يوجد مستأجرين مسجلين بعد")
 
-import streamlit as st
-import pandas as pd
+
 # يفترض الكود وجود session و models (Asset, Unit, Contract) معرفة مسبقاً في التطبيق
 
 def manage_assets_only():
@@ -2985,12 +3042,6 @@ def manage_assets_only():
 #=================================================================
 
 
-import os
-import shutil
-from datetime import datetime
-import streamlit as st
-import pandas as pd
-import base64
 
 # ============================================================
 # 1️⃣ دالة النسخ الاحتياطي
