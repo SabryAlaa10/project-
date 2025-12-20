@@ -1,3 +1,4 @@
+
 """
 =================================================================
 🔒 نظام إدارة الجمعية العقارية - الإصدار الآمن
@@ -27,6 +28,8 @@ import os
 import shutil
 import base64
 import numpy
+import psycopg2
+
 
 # ==========================================
 # 1. إعدادات الصفحة والتهيئة
@@ -116,7 +119,6 @@ st.markdown("""
 
 Base = declarative_base()
 
-import psycopg2
 
 # جلب الرابط من secrets
 conn_url = st.secrets["connections"]["postgresql"]["url"]
@@ -129,11 +131,14 @@ except Exception as e:
     st.error(f"❌ فشل الاتصال: {e}")
 
 # ===== دالة الاتصال الذكية =====
+# ==========================================
+# تحسين إعدادات PostgreSQL - استبدل get_database_engine()
+# ==========================================
+
 @st.cache_resource
 def get_database_engine():
-    # 1. جلب الرابط من المكان الصحيح في secrets
+    """🚀 اتصال محسّن بـ PostgreSQL"""
     try:
-        # هنا غيرنا السطر ليبحث في المسار اللي نجح معاك في الاختبار
         if hasattr(st, 'secrets') and "connections" in st.secrets:
             db_url = st.secrets["connections"]["postgresql"]["url"]
             
@@ -141,33 +146,43 @@ def get_database_engine():
             if db_url.startswith('postgres://'):
                 db_url = db_url.replace('postgres://', 'postgresql://', 1)
             
-            # إنشاء الاتصال
+            # ✅ إعدادات محسّنة للأداء
             engine = create_engine(
                 db_url,
-                pool_pre_ping=True,
-                pool_recycle=300, # تقليل وقت التجديد ليتناسب مع الـ Pooler
+                pool_pre_ping=True,          # فحص الاتصال قبل الاستخدام
+                pool_recycle=280,             # تجديد الاتصالات كل 280 ثانية
+                pool_size=5,                  # ✅ عدد الاتصالات النشطة (كان مفقود)
+                max_overflow=10,              # ✅ اتصالات إضافية عند الحاجة
+                pool_timeout=30,              # ✅ وقت الانتظار للحصول على اتصال
+                echo=False,                   # ✅ إيقاف SQL logging (يسرّع الأداء)
                 connect_args={
                     "connect_timeout": 10,
-                    # حذفنا application_name مؤقتاً لضمان عدم التعارض مع الـ Pooler
+                    "keepalives": 1,          # ✅ الحفاظ على الاتصال حي
+                    "keepalives_idle": 30,    # ✅ فحص كل 30 ثانية
+                    "keepalives_interval": 10,
+                    "keepalives_count": 5,
                 }
             )
             
-            # اختبار الاتصال الفعلي
+            # اختبار الاتصال
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-                conn.commit() # تأكيد العملية
+            return engine, "postgresql"
             
-            st.success("✅ Connected to PostgreSQL (Supabase) - Data is PERSISTENT!")
+            st.success("✅ Connected to PostgreSQL - Optimized!")
             return engine, "postgresql"
             
     except Exception as e:
-        # طباعة الخطأ الحقيقي في الواجهة عشان نعرف لو في مشكلة تانية
-        st.warning(f"⚠️ PostgreSQL connection failed: {e}")
+        st.warning(f"⚠️ PostgreSQL failed: {e}")
     
-    # Fallback لـ SQLite
+    # Fallback to SQLite
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DB_PATH = os.path.join(BASE_DIR, "real_estate_v2.db")
-    engine = create_engine(f'sqlite:///{DB_PATH}', connect_args={'check_same_thread': False})
+    engine = create_engine(
+        f'sqlite:///{DB_PATH}',
+        connect_args={'check_same_thread': False},
+        pool_pre_ping=True
+    )
     
     st.error("⚠️ Using SQLite - Data is TEMPORARY!")
     return engine, "sqlite"
@@ -190,8 +205,12 @@ def get_db_session() -> SQLSession:
         db.close()
         raise e
 
+if db_type == "postgresql":
+    st.sidebar.success("✅ متصل بسحابة Supabase")
+else:
+    st.sidebar.warning("⚠️ يعمل بنمط SQLite المحلي")
 # الجلسة الرئيسية
-session = get_db_session()
+
 
 # ==========================================
 # 3. النماذج (Models) - نفس التعريفات السابقة
@@ -273,60 +292,110 @@ class Payment(Base):
 # إنشاء الجداول
 Base.metadata.create_all(engine)
 
+from contextlib import contextmanager
+
+@contextmanager
+def get_safe_session():
+    """
+    ✅ إدارة آمنة للـ session مع إغلاق تلقائي
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ❌ احذف هذا السطر (السطر 234):
+# session = get_db_session()
+
+# ✅ استبدله بدالة للحصول على session عند الحاجة:
+def get_session():
+    """احصل على session جديدة"""
+    return SessionLocal()
+
+# ==========================================
+# مثال على الاستخدام الصحيح:
+# ==========================================
+
+# ❌ الطريقة القديمة (خطأ):
+# users = session.query(User).all()
+
+# ✅ الطريقة الصحيحة (بعد تعريف User):
+with get_safe_session() as session:
+    users = session.query(User).all()
+
+
+# ==========================================
+# إضافة Caching - ضعه بعد imports
+# ==========================================
+
+from functools import lru_cache
+from datetime import datetime, timedelta
+
+# Cache للبيانات الثابتة (تنتهي صلاحيته كل 5 دقائق)
+@st.cache_data(ttl=300)
+def get_cached_assets():
+    with get_safe_session() as session:
+        return pd.read_sql(session.query(Asset).statement, session.bind)
+
+@st.cache_data(ttl=300)
+def get_cached_units(asset_id=None):
+    with get_safe_session() as session:
+        query = session.query(Unit)
+        if asset_id:
+            query = query.filter_by(asset_id=asset_id)
+        return pd.read_sql(query.statement, session.bind)
+
+@st.cache_data(ttl=300)
+def get_cached_tenants():
+    with get_safe_session() as session:
+        return pd.read_sql(session.query(Tenant).statement, session.bind)
+
+@st.cache_data(ttl=60)  # 1 minute للبيانات المتغيرة
+def get_cached_contracts(status="نشط"):
+    """جلب العقود مع caching"""
+    with get_safe_session() as session:
+        return session.query(Contract).filter_by(status=status).all()
+
+# ==========================================
+# مثال الاستخدام:
+# ==========================================
+
+# ❌ القديم:
+# assets = session.query(Asset).all()
+
+# ✅ الجديد:
+assets = get_cached_assets()
+
 # ==========================================
 # 4. تحديث الجداول الموجودة (Migration)
 # ==========================================
 
-def migrate_database_schema():
-    """
-    🔧 تحديث هيكل قاعدة البيانات للحقول الجديدة
-    """
+@st.cache_resource # 🔥 تعمل مرة واحدة فقط عند تشغيل السيرفر
+def run_migrations():
+    """تحديث هيكل قاعدة البيانات بدون إبطاء التطبيق"""
     inspector = inspect(engine)
-    
-    # تحديث جدول العقود
-    contracts_columns = [col['name'] for col in inspector.get_columns('contracts')]
-    
-    with engine.begin() as conn:
-        if 'status' not in contracts_columns:
-            if db_type == 'postgresql':
-                conn.execute(text('ALTER TABLE contracts ADD COLUMN status VARCHAR DEFAULT \'نشط\''))
-            else:
-                conn.execute(text('ALTER TABLE contracts ADD COLUMN status VARCHAR DEFAULT "نشط"'))
-            print("✅ Added 'status' column to contracts")
-        
-        if 'cancellation_reason' not in contracts_columns:
-            conn.execute(text('ALTER TABLE contracts ADD COLUMN cancellation_reason TEXT'))
-            print("✅ Added 'cancellation_reason' column")
-        
-        if 'cancelled_by' not in contracts_columns:
-            conn.execute(text('ALTER TABLE contracts ADD COLUMN cancelled_by VARCHAR'))
-            print("✅ Added 'cancelled_by' column")
-        
-        if 'cancellation_date' not in contracts_columns:
-            conn.execute(text('ALTER TABLE contracts ADD COLUMN cancellation_date DATE'))
-            print("✅ Added 'cancellation_date' column")
-    
-    # تحديث جدول الدفعات
-    payments_columns = [col['name'] for col in inspector.get_columns('payments')]
-    
-    with engine.begin() as conn:
-        if 'payment_number' not in payments_columns:
-            conn.execute(text('ALTER TABLE payments ADD COLUMN payment_number INTEGER'))
-            print("✅ Added 'payment_number' column to payments")
-        
-        if 'paid_amount' not in payments_columns:
-            conn.execute(text('ALTER TABLE payments ADD COLUMN paid_amount FLOAT DEFAULT 0.0'))
-            print("✅ Added 'paid_amount' column")
-        
-        if 'remaining_amount' not in payments_columns:
-            conn.execute(text('ALTER TABLE payments ADD COLUMN remaining_amount FLOAT DEFAULT 0.0'))
-            print("✅ Added 'remaining_amount' column")
+    try:
+        with engine.begin() as conn:
+            # تحديث جدول العقود
+            contracts_cols = [col['name'] for col in inspector.get_columns('contracts')]
+            if 'status' not in contracts_cols:
+                conn.execute(text("ALTER TABLE contracts ADD COLUMN status VARCHAR DEFAULT 'نشط'"))
+            
+            if 'cancellation_reason' not in contracts_cols:
+                conn.execute(text("ALTER TABLE contracts ADD COLUMN cancellation_reason TEXT"))
 
-# تشغيل الهجرة
-try:
-    migrate_database_schema()
-except Exception as e:
-    print(f"Migration warning: {e}")
+            # تحديث جدول الدفعات
+            payments_cols = [col['name'] for col in inspector.get_columns('payments')]
+            if 'paid_amount' not in payments_cols:
+                conn.execute(text("ALTER TABLE payments ADD COLUMN paid_amount FLOAT DEFAULT 0.0"))
+            
+        return "✅ Migrations completed successfully"
+    except Exception as e:
+        return f"⚠️ Migration skipped: {e}"
+
+# تنفيذ الهجرة مرة واحدة
+migration_status = run_migrations()
 
 # ==========================================
 # 5. دوال مساعدة
@@ -336,11 +405,13 @@ def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def check_login(username, password):
+    """التحقق من الدخول باستخدام جلسة آمنة"""
     username = username.strip().lower()
-    password = password.strip()
-    user = session.query(User).filter_by(username=username).first()
-    if user and user.password_hash == hash_password(password):
-        return user
+    with get_safe_session() as session:
+        user = session.query(User).filter_by(username=username).first()
+        if user and user.password_hash == hash_password(password):
+            # نرجع كائن المستخدم قبل إغلاق الجلسة
+            return {"username": user.username, "role": user.role, "id": user.id}
     return None
 
 # ==========================================
@@ -626,8 +697,8 @@ def login_page():
                     user = check_login(username, password)
                     if user:
                         st.session_state['logged_in'] = True
-                        st.session_state['user_role'] = user.role
-                        st.session_state['username'] = user.username
+                        st.session_state['user_role'] = user['role']
+                        st.session_state['username'] = user['username']
                         st.success("✅ تم تسجيل الدخول بنجاح!")
                         st.rerun()
                     else:
