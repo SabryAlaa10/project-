@@ -791,7 +791,7 @@ def manage_assets():
         return
     
     # 2. جلب المؤشرات في عملية واحدة بدلاً من 3 استعلامات
-    stats = get_dashboard_stats() # نستخدم الدالة التي صممناها للوحة المؤشرات
+    stats = get_dashboard_stats()
     
     st.subheader("📊 ملخص الأصول")
     col1, col2, col3 = st.columns(3)
@@ -863,16 +863,18 @@ def manage_assets():
                                     st.rerun()
                 else:
                     st.info("لا توجد وحدات في هذا الأصل")
+        
         # ===================================================================
-        # Tab 2: إضافة وحدة جديدة
+        # Tab 2: إضافة وحدة جديدة (Admin)
         # ===================================================================
         with tab2:
             st.markdown("#### إضافة وحدة جديدة للأصل")
             
             with st.form("add_unit_form", clear_on_submit=True):
-                # اختيار الأصل
-                asset_list_add = session.query(Asset).all()
-                asset_names_add = [a.name for a in asset_list_add]
+                # استخدام session جديد هنا
+                with get_safe_session() as session_add:
+                    asset_list_add = session_add.query(Asset).all()
+                    asset_names_add = [a.name for a in asset_list_add]
                 
                 selected_asset_add = st.selectbox(
                     "🏢 اختر الأصل",
@@ -900,29 +902,30 @@ def manage_assets():
                     if not unit_num_new.strip():
                         st.error("⚠️ الرجاء إدخال رقم/اسم الوحدة")
                     else:
-                        selected_asset_obj = next((a for a in asset_list_add if a.name == selected_asset_add), None)
-                        
-                        if selected_asset_obj:
-                            existing = session.query(Unit).filter(
-                                Unit.asset_id == selected_asset_obj.id,
-                                Unit.unit_number == unit_num_new.strip()
-                            ).first()
+                        with get_safe_session() as session_submit:
+                            selected_asset_obj = next((a for a in asset_list_add if a.name == selected_asset_add), None)
                             
-                            if existing:
-                                st.error(f"⚠️ رقم الوحدة '{unit_num_new}' موجود بالفعل في هذا الأصل")
-                            else:
-                                new_unit = Unit(
-                                    asset_id=selected_asset_obj.id,
-                                    unit_number=unit_num_new.strip(),
-                                    usage_type=usage_new,
-                                    floor=floor_new.strip() if floor_new else None,
-                                    area=area_new if area_new > 0 else None,
-                                    status="فاضي"
-                                )
-                                session.add(new_unit)
-                                session.commit()
-                                st.success(f"✅ تم إضافة الوحدة **{unit_num_new}** بنجاح!")
-                                st.rerun()
+                            if selected_asset_obj:
+                                existing = session_submit.query(Unit).filter(
+                                    Unit.asset_id == selected_asset_obj.id,
+                                    Unit.unit_number == unit_num_new.strip()
+                                ).first()
+                                
+                                if existing:
+                                    st.error(f"⚠️ رقم الوحدة '{unit_num_new}' موجود بالفعل في هذا الأصل")
+                                else:
+                                    new_unit = Unit(
+                                        asset_id=selected_asset_obj.id,
+                                        unit_number=unit_num_new.strip(),
+                                        usage_type=usage_new,
+                                        floor=floor_new.strip() if floor_new else None,
+                                        area=area_new if area_new > 0 else None,
+                                        status="فاضي"
+                                    )
+                                    session_submit.add(new_unit)
+                                    session_submit.commit()
+                                    st.success(f"✅ تم إضافة الوحدة **{unit_num_new}** بنجاح!")
+                                    st.rerun()
 
     # -------------------------------------------------------------------------
     # 2. للموظف (Employee): إضافة فقط
@@ -932,8 +935,10 @@ def manage_assets():
         st.info("ℹ️ كموظف، يمكنك إضافة وحدات جديدة فقط. للتعديل أو الحذف، تواصل مع المدير.")
         
         with st.form("add_unit_form_employee", clear_on_submit=True):
-            asset_list_add = session.query(Asset).all()
-            asset_names_add = [a.name for a in asset_list_add]
+            # استخدام session جديد للموظف
+            with get_safe_session() as session_emp:
+                asset_list_add = session_emp.query(Asset).all()
+                asset_names_add = [a.name for a in asset_list_add]
             
             selected_asset_add = st.selectbox(
                 "🏢 اختر الأصل",
@@ -961,29 +966,30 @@ def manage_assets():
                 if not unit_num_new.strip():
                     st.error("⚠️ الرجاء إدخال رقم/اسم الوحدة")
                 else:
-                    selected_asset_obj = next((a for a in asset_list_add if a.name == selected_asset_add), None)
-                    
-                    if selected_asset_obj:
-                        existing = session.query(Unit).filter(
-                            Unit.asset_id == selected_asset_obj.id,
-                            Unit.unit_number == unit_num_new.strip()
-                        ).first()
+                    with get_safe_session() as session_submit_emp:
+                        selected_asset_obj = next((a for a in asset_list_add if a.name == selected_asset_add), None)
                         
-                        if existing:
-                            st.error(f"⚠️ رقم الوحدة '{unit_num_new}' موجود بالفعل في هذا الأصل")
-                        else:
-                            new_unit = Unit(
-                                asset_id=selected_asset_obj.id,
-                                unit_number=unit_num_new.strip(),
-                                usage_type=usage_new,
-                                floor=floor_new.strip() if floor_new else None,
-                                area=area_new if area_new > 0 else None,
-                                status="فاضي"
-                            )
-                            session.add(new_unit)
-                            session.commit()
-                            st.success(f"✅ تم إضافة الوحدة **{unit_num_new}** بنجاح!")
-                            st.rerun()
+                        if selected_asset_obj:
+                            existing = session_submit_emp.query(Unit).filter(
+                                Unit.asset_id == selected_asset_obj.id,
+                                Unit.unit_number == unit_num_new.strip()
+                            ).first()
+                            
+                            if existing:
+                                st.error(f"⚠️ رقم الوحدة '{unit_num_new}' موجود بالفعل في هذا الأصل")
+                            else:
+                                new_unit = Unit(
+                                    asset_id=selected_asset_obj.id,
+                                    unit_number=unit_num_new.strip(),
+                                    usage_type=usage_new,
+                                    floor=floor_new.strip() if floor_new else None,
+                                    area=area_new if area_new > 0 else None,
+                                    status="فاضي"
+                                )
+                                session_submit_emp.add(new_unit)
+                                session_submit_emp.commit()
+                                st.success(f"✅ تم إضافة الوحدة **{unit_num_new}** بنجاح!")
+                                st.rerun()
 
     # =========================================================================
     # قسم عرض تفاصيل الوحدات (للجميع)
@@ -991,7 +997,7 @@ def manage_assets():
     st.markdown("---")
     st.subheader("🔍 عرض تفاصيل الوحدات")
     
-    view_asset_names = assets['name'].tolist()
+    view_asset_names = assets_df['name'].tolist()  # استخدام assets_df بدلاً من assets
     
     if view_asset_names:
         selected_view_asset = st.selectbox(
@@ -1001,51 +1007,51 @@ def manage_assets():
         )
         
         # العثور على ID الأصل من DataFrame
-        # نفترض أن الأسماء فريدة
-        view_asset_row = assets[assets['name'] == selected_view_asset]
+        view_asset_row = assets_df[assets_df['name'] == selected_view_asset]
         if not view_asset_row.empty:
-            view_asset_id = int(view_asset_row['id'].values[0]) # إضافة int() للتحويل
+            view_asset_id = int(view_asset_row['id'].values[0])
             
-            # جلب الوحدات
-            view_units = session.query(Unit).filter(Unit.asset_id == view_asset_id).all()
-            
-            if view_units:
-                # عرض إحصائيات سريعة
-                vacant = sum(1 for u in view_units if u.status == 'فاضي')
-                rented = sum(1 for u in view_units if u.status == 'مؤجر')
-                maintenance = sum(1 for u in view_units if u.status == 'تحت الصيانة')
+            # جلب الوحدات باستخدام session جديد
+            with get_safe_session() as session_view:
+                view_units = session_view.query(Unit).filter(Unit.asset_id == view_asset_id).all()
                 
-                col1, col2, col3 = st.columns(3)
-                with col1: st.metric("🟢 فارغة", vacant)
-                with col2: st.metric("🔴 مؤجرة", rented)
-                with col3: st.metric("🟡 صيانة", maintenance)
-                
-                # إنشاء DataFrame للعرض
-                units_display_data = []
-                for u in view_units:
-                    status_icon = {
-                        "فاضي": "🟢",
-                        "مؤجر": "🔴",
-                        "تحت الصيانة": "🟡"
-                    }.get(u.status, "⚪")
+                if view_units:
+                    # عرض إحصائيات سريعة
+                    vacant = sum(1 for u in view_units if u.status == 'فاضي')
+                    rented = sum(1 for u in view_units if u.status == 'مؤجر')
+                    maintenance = sum(1 for u in view_units if u.status == 'تحت الصيانة')
                     
-                    units_display_data.append({
-                        'رقم الوحدة': u.unit_number,
-                        'الدور': u.floor if u.floor else '-',
-                        'النوع': u.usage_type,
-                        'الحالة': f"{status_icon} {u.status}",
-                        'المساحة (م²)': u.area if u.area else '-'
-                    })
-                
-                units_df = pd.DataFrame(units_display_data)
-                
-                st.dataframe(
-                    units_df,
-                    use_container_width=True,
-                    hide_index=True
-                )
-            else:
-                st.info("لا توجد وحدات مضافة لهذا الأصل بعد.")
+                    col1, col2, col3 = st.columns(3)
+                    with col1: st.metric("🟢 فارغة", vacant)
+                    with col2: st.metric("🔴 مؤجرة", rented)
+                    with col3: st.metric("🟡 صيانة", maintenance)
+                    
+                    # إنشاء DataFrame للعرض
+                    units_display_data = []
+                    for u in view_units:
+                        status_icon = {
+                            "فاضي": "🟢",
+                            "مؤجر": "🔴",
+                            "تحت الصيانة": "🟡"
+                        }.get(u.status, "⚪")
+                        
+                        units_display_data.append({
+                            'رقم الوحدة': u.unit_number,
+                            'الدور': u.floor if u.floor else '-',
+                            'النوع': u.usage_type,
+                            'الحالة': f"{status_icon} {u.status}",
+                            'المساحة (م²)': u.area if u.area else '-'
+                        })
+                    
+                    units_df = pd.DataFrame(units_display_data)
+                    
+                    st.dataframe(
+                        units_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("لا توجد وحدات مضافة لهذا الأصل بعد.")
         else:
             st.error("حدث خطأ في تحديد الأصل المختار.")
     else:
