@@ -479,47 +479,31 @@ def show_database_status():
 
 def test_database_connection():
     """
-    🔌 اختبار اتصال قاعدة البيانات
+    🔌 اختبار اتصال قاعدة البيانات - نسخة سريعة وآمنة
     """
     st.subheader("🔌 حالة الاتصال بقاعدة البيانات")
     
     try:
-        # اختبار القراءة
-        user_count = session.query(User).count()
+        # ✅ استخدام الجلسة الآمنة بدلاً من المتغير العام session
+        with get_safe_session() as session:
+            user_count = session.query(User).count()
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
             if db_type == 'postgresql':
                 st.metric("نوع قاعدة البيانات", "PostgreSQL ✅")
-                st.success("البيانات محفوظة بشكل دائم")
+                st.success("البيانات مخزنة سحابياً (Supabase)")
             else:
                 st.metric("نوع قاعدة البيانات", "SQLite ⚠️")
-                st.error("البيانات مؤقتة!")
+                st.error("بيانات محلية مؤقتة")
         
         with col2:
             st.metric("عدد المستخدمين", user_count)
         
         with col3:
             st.metric("حالة الاتصال", "متصل ✅")
-        
-        # معلومات إضافية
-        if db_type == 'postgresql':
-            st.info("""
-            ✅ **مميزات PostgreSQL:**
-            - بيانات دائمة ومحمية
-            - نسخ احتياطية تلقائية
-            - أداء أفضل للبيانات الكبيرة
-            - يدعم عدة مستخدمين في نفس الوقت
-            """)
-        else:
-            st.warning("""
-            ⚠️ **تحذيرات SQLite:**
-            - البيانات ستُفقد عند إعادة التشغيل
-            - لا يوجد نسخ احتياطية تلقائية
-            - يجب حفظ نسخة احتياطية يدوياً
-            """)
-    
+
     except Exception as e:
         st.error(f"❌ فشل الاتصال: {str(e)}")
 
@@ -528,29 +512,25 @@ def test_database_connection():
 # ==========================================
 
 def create_backup():
-    """إنشاء نسخة احتياطية"""
+    """إنشاء نسخة احتياطية (تعمل فقط في النمط المحلي)"""
+    if db_type == 'postgresql':
+        return False, None, "ℹ️ في PostgreSQL، يتم النسخ الاحتياطي تلقائياً عبر Supabase Dashboard."
+
     try:
-        source_db = "real_estate_v2.db"
-        
+        source_db = "real_estate.db" # تأكد من مطابقة الاسم الذي استخدمناه في البداية
         if not os.path.exists(source_db):
-            return False, None, "❌ لم يتم العثور على قاعدة البيانات!"
+            return False, None, "❌ ملف قاعدة البيانات غير موجود."
         
-        backup_dir = "temp_backups"
+        backup_dir = "backups"
         os.makedirs(backup_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_filename = f"نسخة_احتياطية_{timestamp}.db"
-        backup_path = os.path.join(backup_dir, backup_filename)
+        backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
         
         shutil.copy2(source_db, backup_path)
-        
-        file_size = os.path.getsize(backup_path)
-        file_size_mb = file_size / (1024 * 1024)
-        
-        return True, backup_path, f"✅ تم إنشاء النسخة بنجاح ({file_size_mb:.2f} MB)"
-        
+        return True, backup_path, "✅ تم إنشاء نسخة محلية بنجاح"
     except Exception as e:
-        return False, None, f"❌ حدث خطأ: {str(e)}"
+        return False, None, f"❌ خطأ: {str(e)}"
 
 def restore_backup(uploaded_file):
     """استرجاع نسخة احتياطية"""
@@ -632,388 +612,257 @@ def backup_page():
 # 11. صفحة تسجيل الدخول
 # ==========================================
 
+# وضع هذا التنسيق في دالة مخبأة لتوفير المعالجة
+@st.cache_data
+def get_login_styles():
+    return """
+    <style>
+        .login-card {
+            background: #1E1E1E;
+            padding: 30px;
+            border-radius: 13px;
+            text-align: center;
+            border: 2px solid #764ba2;
+        }
+    </style>
+    """
+
 def login_page():
+    st.markdown(get_login_styles(), unsafe_allow_html=True)
     st.markdown("<br><br>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 2, 1])
-    
     with col2:
+        # محاولة تحميل اللوجو مرة واحدة وتخزينه في الكاش
         try:
             st.image("logo.png", use_container_width=True)
         except:
-            st.markdown("""
-                <div style="text-align: center; padding: 20px;">
-                    <h1 style="color: #6B9B7A; font-size: 48px; margin-bottom: 0;">زواج</h1>
-                    <p style="color: #E07A7A; font-size: 20px; margin-top: 10px;">
-                        الجمعية الخيرية لمساعدة الشباب<br>
-                        على الزواج والتوجيه الأسري بجدة
-                    </p>
-                </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        st.markdown("""
-            <div style="
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                padding: 3px;
-                border-radius: 15px;
-                box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-            ">
-                <div style="
-                    background: #1E1E1E;
-                    padding: 30px;
-                    border-radius: 13px;
-                    text-align: center;
-                ">
-                    <h2 style="color: #FFFFFF; margin-bottom: 10px;">🔐 تسجيل الدخول</h2>
-                    <p style="color: #B0B0B0; font-size: 14px;">نظام إدارة الأصول العقارية</p>
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        with st.container():
-            username = st.text_input(
-                "👤 اسم المستخدم",
-                placeholder="أدخل اسم المستخدم",
-                key="login_username"
-            ).strip().lower()
+            st.markdown("<h1 style='text-align:center; color:#6B9B7A;'>جمعية زواج</h1>", unsafe_allow_html=True)
+
+        # استخدام st.form لمنع التطبيق من إعادة التشغيل مع كل حرف تكتبه (تسريع مذهل)
+        with st.form("login_form"):
+            st.subheader("🔐 تسجيل الدخول")
+            username = st.text_input("👤 اسم المستخدم").strip().lower()
+            password = st.text_input("🔒 كلمة المرور", type="password").strip()
+            submit = st.form_submit_button("🚀 دخول", use_container_width=True)
             
-            password = st.text_input(
-                "🔒 كلمة المرور",
-                type="password",
-                placeholder="أدخل كلمة المرور",
-                key="login_password"
-            ).strip()
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            if st.button("🚀 دخول", use_container_width=True, type="primary"):
+            if submit:
                 if not username or not password:
-                    st.error("⚠️ الرجاء إدخال اسم المستخدم وكلمة المرور")
+                    st.error("⚠️ الرجاء إدخال البيانات")
                 else:
                     user = check_login(username, password)
                     if user:
                         st.session_state['logged_in'] = True
                         st.session_state['user_role'] = user['role']
                         st.session_state['username'] = user['username']
-                        st.success("✅ تم تسجيل الدخول بنجاح!")
+                        st.success("✅ تم الدخول")
                         st.rerun()
                     else:
-                        st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
-        
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown("""
-            <div style="text-align: center; color: #808080; font-size: 12px; padding: 20px;">
-                <hr style="border: 1px solid #333; margin: 20px 0;">
-                <p>
-                    جميع الحقوق محفوظة © 2024<br>
-                    <strong style="color: #6B9B7A;">جمعية زواج الخيرية</strong>
-                </p>
-            </div>
-        """, unsafe_allow_html=True)
+                        st.error("❌ بيانات غير صحيحة")
 
 
-def dashboard():
-    st.title("📊 لوحة المؤشرات (الأسبوعي)")
-    
-    # KPIs
-   # استبعاد الدفعات من العقود الملغية
-    total_income = session.query(Payment).join(Contract).filter(
-        Payment.status == 'مدفوع',
-        Contract.status == "نشط"
-    ).with_entities(Payment.total).all()
-    income_val = sum([x[0] for x in total_income])
-    
-    # الحصول على المتأخرات لتحديث KPIs والشارت الجديد
-   # استبعاد الدفعات من العقود الملغية
-    overdue_payments = session.query(Payment).join(Contract).filter(
-        Payment.status != 'مدفوع',
-        Payment.due_date < date.today(),
-        Contract.status == "نشط"
-    ).all()
-    overdue_count = len(overdue_payments)
-    overdue_amount = sum([p.total for p in overdue_payments])
+from sqlalchemy import func
 
-    empty_units = session.query(Unit).filter_by(status='فاضي').count()
-    rented_units = session.query(Unit).filter_by(status='مؤجر').count()
+@st.cache_data(ttl=600)  # تخزين النتائج لمدة 10 دقائق
+def get_dashboard_stats():
+    """حساب المؤشرات داخل قاعدة البيانات مباشرة لسرعة قصوى"""
+    with get_safe_session() as session:
+        # 1. إجمالي الدخل المحصل
+        income = session.query(func.sum(Payment.total)).join(Contract).filter(
+            Payment.status == 'مدفوع',
+            Contract.status == "نشط"
+        ).scalar() or 0
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("إجمالي الدخل المحصل", f"{income_val:,.0f} ريال")
-    c2.metric("المبالغ المتأخرة", f"{overdue_amount:,.0f} ريال", f"{overdue_count} دفعة", delta_color="inverse")
-    c3.metric("الوحدات المؤجرة", rented_units)
-    c4.metric("الوحدات الفاضية", empty_units)
-
-    st.markdown("---")
-    
-    col_chart1, col_chart2 = st.columns(2)
-    col_chart1, col_chart2 = st.columns(2)
-    with col_chart1:
-        st.subheader("توزيع حالة الوحدات")
-        status_df = pd.DataFrame({'الحالة': ['مؤجر', 'فاضي'], 'العدد': [rented_units, empty_units]})
-        st.bar_chart(status_df.set_index('الحالة'))
-    
-    with col_chart2:
-        st.subheader("⏰ تنبيهات الدفعات القادمة")
-        # دفعات قادمة خلال 5 أيام (غير مدفوعة)
-        alert_payment_date = date.today() + pd.Timedelta(days=5)
-        upcoming_payments = session.query(Payment).filter(
+        # 2. المتأخرات (المبلغ والعدد)
+        overdue_query = session.query(
+            func.count(Payment.id),
+            func.sum(Payment.total)
+        ).join(Contract).filter(
             Payment.status != 'مدفوع',
-            Payment.due_date >= date.today(),
-            Payment.due_date <= alert_payment_date
-        ).all()
+            Payment.due_date < date.today(),
+            Contract.status == "نشط"
+        ).first()
         
-        if upcoming_payments:
-            for pay in upcoming_payments:
-                days_left = (pay.due_date - date.today()).days
-                
-                # تحديد لون التنبيه حسب الأيام المتبقية
-                if days_left == 0:
-                    st.error(f"🔴 **اليوم!** دفعة {pay.contract.tenant.name} بمبلغ {pay.total:,.0f} ريال - العقد #{pay.contract_id}")
-                elif days_left == 1:
-                    st.error(f"🔴 **غداً** دفعة {pay.contract.tenant.name} بمبلغ {pay.total:,.0f} ريال - العقد #{pay.contract_id}")
-                elif days_left <= 3:
-                    st.warning(f"🟡 **بعد {days_left} أيام** دفعة {pay.contract.tenant.name} بمبلغ {pay.total:,.0f} ريال ({pay.due_date})")
-                else:
-                    st.info(f"🔵 **بعد {days_left} أيام** دفعة {pay.contract.tenant.name} بمبلغ {pay.total:,.0f} ريال ({pay.due_date})")
-        else:
-            st.success("✅ لا توجد دفعات مستحقة خلال الأيام القادمة")
+        # 3. حالات الوحدات
+        rented = session.query(func.count(Unit.id)).filter_by(status='مؤجر').scalar()
+        empty = session.query(func.count(Unit.id)).filter_by(status='فاضي').scalar()
+
+        return {
+            "income": income,
+            "overdue_count": overdue_query[0] or 0,
+            "overdue_amount": overdue_query[1] or 0,
+            "rented": rented,
+            "empty": empty
+        }
     
-    # إضافة قسم جديد للعقود القريبة من الانتهاء
+@st.cache_data(ttl=300)
+def get_dashboard_alerts():
+    with get_safe_session() as session:
+        # تنبيهات الدفعات (خلال 30 يوم قادمة)
+        upcoming_pays = session.query(Payment, Tenant.name).\
+            join(Contract, Payment.contract_id == Contract.id).\
+            join(Tenant, Contract.tenant_id == Tenant.id).\
+            filter(Payment.status != "مدفوع").\
+            filter(Payment.due_date >= date.today()).\
+            filter(Payment.due_date <= date.today() + timedelta(days=30)).\
+            order_by(Payment.due_date).all()
+
+        # تنبيهات انتهاء العقود (خلال 60 يوم قادمة)
+        exp_date = date.today() + timedelta(days=60)
+        expiring_contracts = session.query(Contract, Tenant.name).\
+            join(Tenant, Contract.tenant_id == Tenant.id).\
+            filter(Contract.status == "نشط").\
+            filter(Contract.end_date >= date.today()).\
+            filter(Contract.end_date <= exp_date).\
+            order_by(Contract.end_date).all()
+            
+        return upcoming_pays, expiring_contracts
+    
+def dashboard():
+    st.title("📊 لوحة المؤشرات الذكية")
+    
+    # جلب البيانات
+    stats = get_dashboard_stats()
+    upcoming_pays, expiring_contracts = get_dashboard_alerts()
+
+    # عرض الـ KPIs (المؤشرات الرئيسية)
+    c1, c2, c3, c4 = st.columns(4)
+    # استخدام or 0 لتجنب أخطاء الجمع
+    income = stats.get('income') or 0
+    overdue_amt = stats.get('overdue_amount') or 0
+    
+    c1.metric("إجمالي التحصيل", f"{income:,.0f} ريال")
+    c2.metric("المتأخرات الحالية", f"{overdue_amt:,.0f} ريال", f"{stats.get('overdue_count', 0)} دفعة", delta_color="inverse")
+    c3.metric("الوحدات المؤجرة", stats.get('rented', 0))
+    c4.metric("الوحدات الشاغرة", stats.get('empty', 0))
+
     st.markdown("---")
-    with st.expander("📋 تنبيهات العقود القريبة من الانتهاء (60 يوم)", expanded=False):
-        alert_date = date.today() + pd.Timedelta(days=60)
-        expiring = session.query(Contract).filter(
-            Contract.end_date <= alert_date, 
-            Contract.end_date >= date.today(),
-            Contract.status == "نشط"  # ← استبعاد العقود الملغية
-        ).all()
-        
-        if expiring:
-            for exp in expiring:
-                days_left = (exp.end_date - date.today()).days
+    
+    col_chart, col_alerts = st.columns([1, 1.5])
+    
+    with col_chart:
+        st.subheader("🏢 إشغال الوحدات")
+        status_df = pd.DataFrame({
+            'الحالة': ['مؤجرة', 'شاغرة'], 
+            'العدد': [stats.get('rented', 0), stats.get('empty', 0)]
+        })
+        # عرض رسم بياني دائري (أفضل لحالة الوحدات)
+        st.bar_chart(status_df.set_index('الحالة'), color="#3b82f6")
+
+    with col_alerts:
+        st.subheader("⏰ تنبيهات التحصيل (30 يوم)")
+        if upcoming_pays:
+            for item in upcoming_pays:
+                # التأكد من طريقة فك الحزمة (Unpacking)
+                pay, t_name = item 
                 
-                if days_left <= 15:
-                    st.error(f"🔴 **عاجل!** العقد #{exp.id} للمستأجر **{exp.tenant.name}** ينتهي بعد {days_left} يوم ({exp.end_date})")
-                elif days_left <= 30:
-                    st.warning(f"🟡 العقد #{exp.id} للمستأجر **{exp.tenant.name}** ينتهي بعد {days_left} يوم ({exp.end_date})")
+                days = (pay.due_date - date.today()).days
+                # تنسيق المبلغ والحالة
+                amt = pay.total or 0
+                if days == 0:
+                    st.error(f"🔴 **اليوم**: {t_name} (المبلغ: {amt:,.0f} ريال)")
+                elif days == 1:
+                    st.warning(f"🟠 **غداً**: {t_name} (المبلغ: {amt:,.0f} ريال)")
                 else:
-                    st.info(f"🔵 العقد #{exp.id} للمستأجر **{exp.tenant.name}** ينتهي بعد {days_left} يوم ({exp.end_date})")
+                    st.info(f"🔵 **بعد {days} يوم**: {t_name} (المبلغ: {amt:,.0f} ريال)")
         else:
-            st.success("✅ لا توجد عقود قريبة الانتهاء")
+            st.success("✅ لا توجد دفعات مستحقة قريباً")
 
-
-# يفترض الكود وجود session و models (Asset, Unit, Contract) معرفة مسبقاً
+    st.markdown("---")
+    
+    # تنبيهات العقود
+    with st.expander("📋 عقود تقترب من الانتهاء (تجديد/إخلاء)", expanded=True):
+        if expiring_contracts:
+            for item in expiring_contracts:
+                cont, t_name = item
+                days = (cont.end_date - date.today()).days
+                st.warning(f"⚠️ عقد **{t_name}** (رقم: {cont.contract_number or cont.id}) - ينتهي خلال {days} يوم")
+        else:
+            st.success("✅ جميع العقود سارية لفترة كافية")
 
 def manage_assets():
     st.header("🏢 إدارة الأصول والوحدات")
     
-    # تحميل الأصول
-    # ملاحظة: نستخدم statement لجلب البيانات كـ DataFrame للعرض السريع
-    try:
-        stmt = session.query(Asset).statement
-        assets = pd.read_sql(stmt, session.bind)
-    except Exception as e:
-        st.error(f"حدث خطأ أثناء تحميل الأصول: {e}")
-        return
+    # 1. جلب الأصول باستخدام الكاش (سريع جداً)
+    assets_df = get_cached_assets() 
 
-    if assets.empty:
-        st.info("لا توجد أصول مُضافة بعد. يرجى إضافة أصول من صفحة 'إدارة الأصول' أولاً.")
+    if assets_df.empty:
+        st.info("لا توجد أصول مُضافة بعد.")
         return
     
-    # عرض ملخص سريع للأصول
+    # 2. جلب المؤشرات في عملية واحدة بدلاً من 3 استعلامات
+    stats = get_dashboard_stats() # نستخدم الدالة التي صممناها للوحة المؤشرات
+    
     st.subheader("📊 ملخص الأصول")
     col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("إجمالي الأصول", len(assets))
-    with col2:
-        total_units = session.query(Unit).count()
-        st.metric("إجمالي الوحدات", total_units)
-    with col3:
-        rented_units = session.query(Unit).filter(Unit.status == "مؤجر").count()
-        st.metric("الوحدات المؤجرة", rented_units)
+    col1.metric("إجمالي الأصول", len(assets_df))
+    col2.metric("إجمالي الوحدات", stats['rented'] + stats['empty'])
+    col3.metric("الوحدات المؤجرة", stats['rented'])
     
     st.markdown("---")
     
-    # عرض الأصول في جدول (اختياري، للعلم فقط)
-    with st.expander("📋 عرض قائمة الأصول", expanded=False):
-        st.dataframe(
-            assets[['name', 'type', 'location']], 
-            use_container_width=True, 
-            hide_index=True
-        )
-    
-    st.markdown("---")
-    
-    # =========================================================================
-    # قسم الإدارة (حسب الصلاحية)
-    # =========================================================================
-    
-    # -------------------------------------------------------------------------
-    # 1. للمدير (Admin): تعديل وإضافة وحذف
-    # -------------------------------------------------------------------------
+    # 3. قسم الإدارة (Admin)
     if st.session_state.get('user_role') == 'Admin':
         st.subheader("⚙️ إدارة الوحدات (مدير)")
-        
-        # Tabs لتقسيم الوظائف
         tab1, tab2 = st.tabs(["✏️ تعديل وحدة موجودة", "➕ إضافة وحدة جديدة"])
 
-        # ===================================================================
-        # Tab 1: تعديل وحدة موجودة
-        # ===================================================================
         with tab1:
             st.markdown("#### تعديل أو حذف وحدة")
             
-            # اختيار الأصل
-            asset_list = session.query(Asset).all()
-            asset_names = [a.name for a in asset_list]
-            
-            if asset_names:
-                selected_asset_name = st.selectbox(
-                    "🏢 اختر الأصل",
-                    asset_names,
-                    key='edit_asset_select'
-                )
+            # بدلاً من الاستعلام، نأخذ الأسماء من الـ DataFrame الموجود في الذاكرة
+            asset_options = dict(zip(assets_df['name'], assets_df['id']))
+            selected_asset_name = st.selectbox("🏢 اختر الأصل", options=list(asset_options.keys()), key='edit_asset_sel')
+            selected_asset_id = asset_options[selected_asset_name]
+
+            # جلب الوحدات لهذا الأصل فقط
+            with get_safe_session() as session:
+                units = session.query(Unit).filter_by(asset_id=selected_asset_id).all()
                 
-                # العثور على كائن الأصل المختار
-                selected_asset = next((a for a in asset_list if a.name == selected_asset_name), None)
-                
-                if selected_asset:
-                    # جلب جميع الوحدات للأصل المحدد
-                    all_units = session.query(Unit).filter(
-                        Unit.asset_id == selected_asset.id
-                    ).all()
+                if units:
+                    # تحويل الوحدات لقاموس لسهولة الوصول
+                    unit_map = {f"وحدة {u.unit_number} - {u.usage_type} ({u.status})": u.id for u in units}
+                    selected_unit_label = st.selectbox("🔑 اختر الوحدة", options=list(unit_map.keys()))
+                    unit_id = unit_map[selected_unit_label]
                     
-                    if all_units:
-                        # إنشاء قائمة الوحدات للعرض في القائمة المنسدلة
-                        unit_labels = []
-                        unit_ids = []
-                        for u in all_units:
-                            label = f"وحدة {u.unit_number} - الدور {u.floor or 'غير محدد'} ({u.usage_type}) - {u.status}"
-                            unit_labels.append(label)
-                            unit_ids.append(u.id)
-                        
-                        selected_unit_label = st.selectbox(
-                            "🔑 اختر الوحدة المراد تعديلها أو حذفها",
-                            unit_labels,
-                            key='edit_unit_select'
-                        )
-                        
-                        # العثور على الوحدة المختارة
-                        selected_index = unit_labels.index(selected_unit_label)
-                        selected_unit_id = unit_ids[selected_index]
-                        unit_to_manage = session.get(Unit, selected_unit_id)
-                        
-                        if unit_to_manage:
-                            # التحقق من ارتباط الوحدة بعقود
-                            # نستخدم filter للتأكد من العقود النشطة التي تحتوي على معرف الوحدة
-                            linked_contracts = session.query(Contract).filter(
-                                Contract.linked_units_ids.like(f"%{unit_to_manage.id}%"),
-                                Contract.status == "نشط"
-                            ).all()
-                            
-                            has_active_contracts = len(linked_contracts) > 0
-                            
-                            st.markdown("---")
-                            
-                            # Tabs داخلية للتعديل والحذف
-                            edit_unit_tab, delete_unit_tab = st.tabs(["✏️ تعديل الوحدة", "🗑️ حذف الوحدة"])
-                            
-                            # ----- تعديل -----
-                            with edit_unit_tab:
-                                with st.form("edit_unit_form"):
-                                    st.markdown("##### 📝 البيانات الأساسية")
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        new_floor = st.text_input(
-                                            "الدور",
-                                            value=unit_to_manage.floor if unit_to_manage.floor else "",
-                                            placeholder="مثال: 1، 2، أرضي"
-                                        )
-                                        new_usage = st.selectbox(
-                                            "نوع الاستخدام",
-                                            ["سكني", "تجاري", "حق انتفاع", "سكن عمال"],
-                                            index=["سكني", "تجاري", "حق انتفاع", "سكن عمال"].index(unit_to_manage.usage_type) if unit_to_manage.usage_type in ["سكني", "تجاري", "حق انتفاع", "سكن عمال"] else 0
-                                        )
-                                    with col2:
-                                        new_area = st.number_input(
-                                            "المساحة (م²)",
-                                            min_value=0.0,
-                                            value=float(unit_to_manage.area) if unit_to_manage.area else 0.0,
-                                            step=0.5
-                                        )
-                                        new_status = st.selectbox(
-                                            "حالة الوحدة",
-                                            ["فاضي", "مؤجر", "تحت الصيانة"],
-                                            index=["فاضي", "مؤجر", "تحت الصيانة"].index(unit_to_manage.status) if unit_to_manage.status in ["فاضي", "مؤجر", "تحت الصيانة"] else 0
-                                        )
-                                    
-                                    if has_active_contracts:
-                                        st.warning(f"⚠️ هذه الوحدة مرتبطة بـ {len(linked_contracts)} عقد نشط. تغيير الحالة يدوياً قد يؤثر على البيانات.")
-                                    
-                                    st.markdown("---")
-                                    submit_edit = st.form_submit_button("💾 حفظ التعديلات", use_container_width=True, type="primary")
-                                    
-                                    if submit_edit:
-                                        unit_to_manage.floor = new_floor if new_floor else None
-                                        unit_to_manage.area = new_area if new_area > 0 else None
-                                        unit_to_manage.usage_type = new_usage
-                                        unit_to_manage.status = new_status
-                                        session.commit()
-                                        st.success(f"✅ تم تحديث الوحدة **{unit_to_manage.unit_number}** بنجاح!")
-                                        st.rerun()
+                    # جلب بيانات الوحدة المختارة
+                    unit_to_manage = session.get(Unit, unit_id)
+                    
+                    # فحص العقود المرتبطة (استعلام سريع)
+                    has_active = session.query(Contract).filter(
+                        Contract.linked_units_ids.like(f"%{unit_id}%"),
+                        Contract.status == "نشط"
+                    ).count() > 0
 
-                            # ----- حذف -----
-                            with delete_unit_tab:
-                                st.markdown("### 🗑️ حذف الوحدة")
-                                with st.expander("📄 معلومات الوحدة", expanded=True):
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        st.write(f"**رقم الوحدة:** {unit_to_manage.unit_number}")
-                                        st.write(f"**الدور:** {unit_to_manage.floor or '-'}")
-                                        st.write(f"**الأصل:** {selected_asset.name}")
-                                    with col2:
-                                        st.write(f"**النوع:** {unit_to_manage.usage_type}")
-                                        st.write(f"**الحالة:** {unit_to_manage.status}")
-                                        st.write(f"**المساحة:** {unit_to_manage.area or '-'} م²")
-                                
-                                if has_active_contracts:
-                                    st.error("🚫 **لا يمكن حذف هذه الوحدة!**")
-                                    st.error(f"السبب: الوحدة مرتبطة بـ **{len(linked_contracts)}** عقد نشط")
-                                    with st.expander("📋 العقود المرتبطة"):
-                                        for contract in linked_contracts:
-                                            st.write(f"- عقد #{contract.contract_number or contract.id} - {contract.tenant.name}")
-                                    st.info("💡 **للحذف:** يجب إلغاء جميع العقود المرتبطة أولاً")
-                                else:
-                                    st.warning("⚠️ أنت على وشك حذف هذه الوحدة نهائياً")
-                                    st.info("✅ هذه الوحدة غير مرتبطة بأي عقود ويمكن حذفها بأمان")
-                                    st.markdown("---")
-                                    
-                                    confirm_delete = st.checkbox(
-                                        f"✅ أؤكد حذف الوحدة **{unit_to_manage.unit_number}** نهائياً",
-                                        key='confirm_delete_unit'
-                                    )
-                                    
-                                    if confirm_delete:
-                                        if st.button("🗑️ حذف الوحدة نهائياً", type="primary", use_container_width=True, key='final_delete_unit_btn'):
-                                            try:
-                                                unit_num_deleted = unit_to_manage.unit_number
-                                                session.delete(unit_to_manage)
-                                                session.commit()
-                                                st.success(f"✅ تم حذف الوحدة **{unit_num_deleted}** بنجاح!")
-                                                st.rerun()
-                                            except Exception as e:
-                                                session.rollback()
-                                                st.error(f"❌ حدث خطأ أثناء الحذف: {str(e)}")
-                                    else:
-                                        st.warning("⚠️ يرجى تأكيد الحذف بالضغط على المربع أعلاه")
-                    else:
-                        st.info("ℹ️ لا توجد وحدات في هذا الأصل حالياً.")
-            else:
-                st.warning("لا توجد أصول مسجلة.")
+                    st.markdown("---")
+                    e_tab, d_tab = st.tabs(["📝 تعديل", "🗑️ حذف"])
 
+                    with e_tab:
+                        with st.form("quick_edit_unit"):
+                            col_a, col_b = st.columns(2)
+                            new_floor = col_a.text_input("الدور", value=unit_to_manage.floor or "")
+                            new_status = col_b.selectbox("الحالة", ["فاضي", "مؤجر", "تحت الصيانة"], 
+                            index=["فاضي", "مؤجر", "تحت الصيانة"].index(unit_to_manage.status))
+                            
+                            if st.form_submit_button("💾 حفظ التعديلات", use_container_width=True):
+                                unit_to_manage.floor = new_floor
+                                unit_to_manage.status = new_status
+                                session.commit()
+                                st.success("✅ تم التحديث")
+                                st.rerun()
+
+                    with d_tab:
+                        if has_active:
+                            st.error("🚫 لا يمكن الحذف: الوحدة مرتبطة بعقد نشط")
+                        else:
+                            st.warning("⚠️ سيتم حذف الوحدة نهائياً")
+                            if st.checkbox(f"تأكيد حذف وحدة {unit_to_manage.unit_number}"):
+                                if st.button("🗑️ تنفيذ الحذف الآن"):
+                                    session.delete(unit_to_manage)
+                                    session.commit()
+                                    st.success("Deleted!")
+                                    st.rerun()
+                else:
+                    st.info("لا توجد وحدات في هذا الأصل")
         # ===================================================================
         # Tab 2: إضافة وحدة جديدة
         # ===================================================================
@@ -1202,6 +1051,34 @@ def manage_assets():
     else:
         st.info("لا توجد أصول لعرض وحداتها.")
 
+def generate_contract_payments(session, contract):
+    """توليد دفعات الإيجار تلقائياً بناءً على المدة والدورية"""
+    from dateutil.relativedelta import relativedelta
+    
+    # تحديد عدد الشهور بناءً على الدورية
+    freq_map = {"شهري": 1, "ربع سنوي": 3, "نصف سنوي": 6, "سنوي": 12}
+    months_step = freq_map.get(contract.payment_freq, 12)
+    
+    # حساب عدد الدفعات الإجمالي
+    total_months = (contract.end_date.year - contract.start_date.year) * 12 + (contract.end_date.month - contract.start_date.month)
+    num_payments = max(1, total_months // months_step)
+    
+    # القيمة لكل دفعة (شاملة الضريبة إذا كان تجارياً)
+    amount_per_period = (contract.rent_amount / (12 / months_step))
+    vat_amount = amount_per_period * contract.vat_rate
+    total_with_vat = amount_per_period + vat_amount
+
+    for i in range(num_payments):
+        payment_date = contract.start_date + relativedelta(months=(i * months_step))
+        new_payment = Payment(
+            contract_id=contract.id,
+            amount=total_with_vat,
+            due_date=payment_date,
+            status="معلق"
+        )
+        session.add(new_payment)
+
+
 def manage_contracts():
     st.header("📄 إدارة العقود")
     # الموظف يقدر يضيف عقود فقط، المدير يقدر يضيف ويعدل
@@ -1223,7 +1100,7 @@ def manage_contracts():
                     ).first()
                     
                     if u.status == 'فاضي' or (u.status == 'مؤجر' and not contract_exists):
-                         u_options[f"{u.unit_number} ({u.asset.name})"] = u.id
+                        u_options[f"{u.unit_number} ({u.asset.name})"] = u.id
 
                 st.markdown("#### 📋 بيانات العقد الأساسية")
                 
@@ -1320,12 +1197,15 @@ def manage_contracts():
                         for err in errors:
                             st.error(err)
                     else:
-                        # حساب تاريخ النهاية
-                        e_date = s_date.replace(year=s_date.year + int(contract_duration))
+                        from dateutil.relativedelta import relativedelta
+                        
+                        # 1. حساب تاريخ النهاية بدقة (باستخدام relativedelta)
+                        e_date = s_date + relativedelta(years=int(contract_duration))
                         
                         u_ids = ",".join([str(u_options[u]) for u in sel_units])
                         vat = 0.15 if c_type == "تجاري" else 0.0
                         
+                        # 2. إنشاء كائن العقد
                         new_c = Contract(
                             contract_number=contract_number.strip(),
                             tenant_id=t_dict[t_name], 
@@ -1335,18 +1215,45 @@ def manage_contracts():
                             start_date=s_date, 
                             end_date=e_date,
                             vat_rate=vat, 
-                            linked_units_ids=u_ids
+                            linked_units_ids=u_ids,
+                            status="نشط"
                         )
                         session.add(new_c)
-                        
-                        # تحديث حالة الوحدات إلى مؤجر
+                        session.flush()  # للحصول على معرف العقد (ID) قبل الحفظ النهائي
+
+                        # 3. تحديث حالة الوحدات إلى مؤجر
                         for u_label in sel_units:
                             uid = u_options[u_label]
                             u_obj = session.get(Unit, uid)
-                            u_obj.status = "مؤجر"
+                            if u_obj:
+                                u_obj.status = "مؤجر"
                         
+                        # 4. توليد الدفعات المالية تلقائياً
+                        # ==========================================
+                        freq_map = {"شهري": 1, "ربع سنوي": 3, "نصف سنوي": 6, "سنوي": 12}
+                        months_step = freq_map.get(freq, 12)
+                        
+                        # حساب عدد الدفعات بناءً على المدة والدورية
+                        total_months = int(contract_duration) * 12
+                        num_payments = total_months // months_step
+                        
+                        # حساب قيمة الدفعة الواحدة مع الضريبة
+                        base_payment = rent / (12 / months_step)
+                        total_payment = base_payment * (1 + vat)
+
+                        for i in range(num_payments):
+                            p_due_date = s_date + relativedelta(months=(i * months_step))
+                            new_p = Payment(
+                                contract_id=new_c.id,
+                                amount=total_payment,
+                                due_date=p_due_date,
+                                status="معلق"
+                            )
+                            session.add(new_p)
+                        # ==========================================
+
                         session.commit()
-                        st.success(f"✅ تم إنشاء العقد رقم **{contract_number}** بنجاح! مدة العقد: **{contract_duration} سنة**")
+                        st.success(f"✅ تم إنشاء العقد رقم {contract_number} وجدولة {num_payments} دفعات بنجاح!")
                         st.balloons()
                         st.rerun()
     # عرض العقود
@@ -1370,24 +1277,27 @@ def manage_contracts():
     
     if contracts:
         contracts_data = []
+        
+        # تحسين: جلب جميع الوحدات مرة واحدة وتخزينها في قاموس للسرعة
+        all_units_lookup = {u.id: u.unit_number for u in session.query(Unit).all()}
+        
         for c in contracts:
-            # حالة العقد مع أيقونة
             status_icon = "✅" if c.status == "نشط" else "🚫"
             
-            # الوحدات
+            # معالجة الوحدات من القاموس مباشرة بدلاً من استعلام قاعدة البيانات لكل وحدة
             unit_names = []
             if c.linked_units_ids:
                 for uid in c.linked_units_ids.split(','):
-                    u = session.get(Unit, int(uid))
-                    if u:
-                        unit_names.append(f"{u.unit_number}")
+                    u_num = all_units_lookup.get(int(uid))
+                    if u_num:
+                        unit_names.append(u_num)
             
             contracts_data.append({
-                'رقم العقد': c.contract_number or c.id,
+                'رقم العقد': c.contract_number or str(c.id),
                 'المستأجر': c.tenant.name,
                 'النوع': c.contract_type,
-                'القيمة السنوية': f"{c.rent_amount:,.0f}",
-                'الوحدات': ', '.join(unit_names) if unit_names else '-',
+                'القيمة السنوية': f"{c.rent_amount:,.0f} ريال",
+                'الوحدات': ' | '.join(unit_names) if unit_names else '-',
                 'تاريخ البداية': c.start_date,
                 'تاريخ النهاية': c.end_date,
                 'الحالة': f"{status_icon} {c.status}"
@@ -1576,549 +1486,360 @@ def cancel_contract_page():
                 st.rerun()
 def manage_payments():
     st.header("💰 إدارة الدفعات")
-     # تنبيه للموظف
-    if st.session_state['user_role'] == 'Employee':
-        st.info("ℹ️ كموظف، يمكنك تسجيل الدفعات وتوليدها فقط. لا يمكنك تعديل أو حذف الدفعات الموجودة.")
-    
-    # عرض العقود النشطة فقط (استبعاد الملغية)
-    contracts = session.query(Contract).filter_by(status="نشط").all()
-    c_opts = {f"عقد #{c.contract_number if c.contract_number else c.id} - {c.tenant.name}": c for c in contracts}
-    
-    if not c_opts:
-        st.warning("لا توجد عقود مضافة لتوليد دفعات.")
+
+    if st.session_state.get('user_role') == 'Employee':
+        st.info("ℹ️ كموظف، يمكنك تسجيل الدفعات فقط")
+
+    # ----------------------------------
+    # جلب العقود النشطة مع المستأجر (تحسين الأداء)
+    # ----------------------------------
+    from sqlalchemy.orm import joinedload
+
+    contracts = session.query(Contract)\
+        .options(joinedload(Contract.tenant))\
+        .filter(Contract.status == "نشط")\
+        .all()
+
+    if not contracts:
+        st.warning("لا توجد عقود نشطة")
         return
 
-    sel_c_label = st.selectbox("اختر العقد", list(c_opts.keys()))
-    if sel_c_label:
-        contract = c_opts[sel_c_label]
-        
-        # عرض معلومات العقد
-        with st.expander("📋 معلومات العقد", expanded=False):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.write(f"**المستأجر:** {contract.tenant.name}")
-                st.write(f"**نوع العقد:** {contract.contract_type}")
-            with col2:
-                st.write(f"**القيمة السنوية:** {contract.rent_amount:,.0f} ريال")
-                st.write(f"**دورية الدفع:** {contract.payment_freq}")
-            with col3:
-                st.write(f"**من:** {contract.start_date}")
-                st.write(f"**إلى:** {contract.end_date}")
-        
-        # عرض الدفعات
-        payments = session.query(Payment).filter_by(contract_id=contract.id).all()
-        
-        if not payments:
-            st.info("ℹ️ لم يتم توليد دفعات لهذا العقد بعد")
-            
-            if st.button("🔄 توليد الدفعات تلقائياً", type="primary", use_container_width=True):
-                # منطق التوليد
-                freq_map = {"شهري": 1, "ربع سنوي": 3, "نصف سنوي": 6, "سنوي": 12}
-                step = freq_map.get(contract.payment_freq, 12)
-                amount_per_pay = contract.rent_amount / (12/step)
-                
-                curr = contract.start_date
-                
-                # توليد الدفعات
-                # توليد الدفعات
-                payments_to_add = []
-                payment_counter = 1  # عداد الدفعات يبدأ من 1
-                
-                while curr < contract.end_date:
-                    vat_val = amount_per_pay * contract.vat_rate
-                    total_amount = amount_per_pay + vat_val
-                    
-                    payments_to_add.append(Payment(
-                        contract_id=contract.id, 
-                        payment_number=payment_counter,  # ← رقم الدفعة
-                        due_date=curr, 
-                        amount=amount_per_pay,
-                        vat=vat_val, 
-                        total=total_amount,
-                        paid_amount=0.0,
-                        remaining_amount=total_amount,
-                        status="مستحق", 
-                        beneficiary="الجمعية",
-                        payment_method=None
-                    ))
-                    
-                    payment_counter += 1  # زيادة العداد
-                    
-                    # زيادة التاريخ
-                    new_month = curr.month + step
-                    new_year = curr.year + (new_month - 1) // 12
-                    new_month = (new_month - 1) % 12 + 1
-                    day_to_use = min(curr.day, 28) 
-                    
-                    next_date = date(new_year, new_month, day_to_use)
-                    if next_date > contract.end_date:
-                        break
-                        
-                    curr = next_date
-                    vat_val = amount_per_pay * contract.vat_rate
-                    total_amount = amount_per_pay + vat_val
-                    
-                    payments_to_add.append(Payment(
-                        contract_id=contract.id, 
-                        due_date=curr, 
-                        amount=amount_per_pay,
-                        vat=vat_val, 
-                        total=total_amount,
-                        paid_amount=0.0,
-                        remaining_amount=total_amount,
-                        status="مستحق", 
-                        beneficiary="الجمعية",
-                        payment_method=None
-                    ))
-                    
-                    # زيادة التاريخ
-                    new_month = curr.month + step
-                    new_year = curr.year + (new_month - 1) // 12
-                    new_month = (new_month - 1) % 12 + 1
-                    day_to_use = min(curr.day, 28) 
-                    
-                    next_date = date(new_year, new_month, day_to_use)
-                    if next_date > contract.end_date:
-                        break
-                        
-                    curr = next_date
-                
-                session.add_all(payments_to_add)
-                session.commit()
-                st.success(f"✅ تم توليد {len(payments_to_add)} دفعة بنجاح!")
-                st.rerun()
-        
-        # جدول الدفعات
-        if payments:
-            st.markdown("---")
-            st.subheader("📊 قائمة الدفعات")
-            
-            # إحصائيات سريعة
-            # إحصائيات سريعة
-            total_payments = len(payments)
-            paid_payments = len([p for p in payments if p.status == "مدفوع"])
-            partial_payments = len([p for p in payments if p.status == "مدفوع جزئياً"])
-            pending_payments = len([p for p in payments if p.status == "مستحق"])
-            
-            # حساب المبالغ بشكل صحيح
-            total_paid_amount = 0
-            total_remaining_amount = 0
-            total_contract_amount = 0
-            
-            for p in payments:
-                total_contract_amount += p.total
-                
-                # التأكد من القيم
-                paid = p.paid_amount if p.paid_amount else 0.0
-                remaining = p.remaining_amount if p.remaining_amount else (p.total if p.status != 'مدفوع' else 0.0)
-                
-                # إذا كانت مدفوعة ولكن remaining_amount فارغ، نصفره
-                if p.status == 'مدفوع':
-                    remaining = 0.0
-                    paid = p.total
-                
-                total_paid_amount += paid
-                total_remaining_amount += remaining
-            
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("إجمالي الدفعات", total_payments)
-            col2.metric("✅ مدفوع كامل", paid_payments)
-            col3.metric("🟡 مدفوع جزئياً", partial_payments)
-            col4.metric("⏳ مستحق", pending_payments)
-            col5.metric("المتبقي الكلي", f"{total_remaining_amount:,.0f} ريال")
-            
-            # شريط التقدم
-            payment_progress = (total_paid_amount / total_contract_amount * 100) if total_contract_amount > 0 else 0
-            st.progress(payment_progress / 100)
-            st.caption(f"تم سداد {payment_progress:.1f}% من إجمالي قيمة العقد ({total_paid_amount:,.0f} من {total_contract_amount:,.0f} ريال)")
-            
-            # إنشاء DataFrame للعرض
-            # إنشاء DataFrame للعرض
-            # إنشاء DataFrame للعرض
-            p_data = []
-            for p in payments:
-                # التأكد من القيم
-                paid = p.paid_amount if p.paid_amount else 0.0
-                remaining = p.remaining_amount if p.remaining_amount else (p.total if p.status != 'مدفوع' else 0.0)
-                
-                # تصحيح البيانات إذا كانت الحالة مدفوع
-                if p.status == 'مدفوع':
-                    paid = p.total
-                    remaining = 0.0
-                
-                # تحديد أيقونة الحالة
-                if p.status == "مدفوع":
-                    status_icon = "✅"
-                elif p.status == "مدفوع جزئياً":
-                    status_icon = "🟡"
-                elif p.due_date < date.today():
-                    status_icon = "🔴"
-                else:
-                    status_icon = "⏳"
-                
-                # تحويل تاريخ الدفع لنص لتجنب مشكلة Arrow
-                payment_date_str = str(p.paid_date) if p.paid_date else '-'
-                
-                p_data.append({
-                    'رقم الدفعة': p.payment_number if p.payment_number else p.id,  # استخدام payment_number
-                    'تاريخ الاستحقاق': str(p.due_date),  # تحويل لنص
-                    'المبلغ الكلي': f"{p.total:,.0f}",
-                    'المدفوع': f"{paid:,.0f}",
-                    'المتبقي': f"{remaining:,.0f}",
-                    'الحالة': f"{status_icon} {p.status}",
-                    'تاريخ الدفع': payment_date_str,
-                    'طريقة الدفع': p.payment_method if p.payment_method else '-'
-                })
-            
-            p_df = pd.DataFrame(p_data)
-            st.dataframe(p_df, use_container_width=True, hide_index=True)
-            
-            # قسم تسجيل السداد
-            st.markdown("---")
-            st.subheader("💳 تسجيل سداد دفعة")
-            
-            to_pay = [p for p in payments if p.status != "مدفوع"]
-            if to_pay:
-                with st.form("payment_form"):
-                    # اختيار الدفعة
-                    pay_options = {}
-                    for p in to_pay:
-                        payment_num = p.payment_number if p.payment_number else p.id
-                        
-                        if p.status == "مدفوع جزئياً":
-                            label = f"دفعة #{payment_num} - استحقاق {p.due_date} | المتبقي: {p.remaining_amount:,.0f} ريال (مدفوع جزئياً)"
-                        else:
-                            label = f"دفعة #{payment_num} - استحقاق {p.due_date} | المطلوب: {p.total:,.0f} ريال"
-                        pay_options[label] = p.id
-                    
-                    selected_pay = st.selectbox(
-                        "اختر الدفعة المراد تسجيلها",
-                        list(pay_options.keys())
-                    )
-                    pay_id = pay_options[selected_pay]
-                    
-                    # جلب الدفعة المختارة
-                    selected_payment = session.get(Payment, pay_id)
-                    
-                    st.markdown("---")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # عرض معلومات الدفعة
-                        remaining = selected_payment.remaining_amount if selected_payment.remaining_amount else selected_payment.total
-                        paid_before = selected_payment.paid_amount if selected_payment.paid_amount else 0.0
-                        
-                        st.info(f"""
-                        **تفاصيل الدفعة:**
-                        - المبلغ الكلي: {selected_payment.total:,.0f} ريال
-                        - المدفوع سابقاً: {paid_before:,.0f} ريال
-                        - المتبقي: {remaining:,.0f} ريال
-                        """)
-                        
-                        # إدخال المبلغ المدفوع
-                        max_amount = float(remaining) if remaining > 0 else float(selected_payment.total)
-                        
-                        paid_now = st.number_input(
-                            "المبلغ المدفوع الآن *",
-                            min_value=0.01,
-                            max_value=max_amount,
-                            value=max_amount,
-                            step=100.0,
-                            help=f"الحد الأقصى: {max_amount:,.0f} ريال"
-                        )
-                    
-                    with col2:
-                        payment_method = st.selectbox(
-                            "طريقة الدفع *",
-                            ["تحويل بنكي", "منصة إيجار"],
-                            help="اختر طريقة الدفع المستخدمة"
-                        )
-                        
-                        payment_date = st.date_input(
-                            "تاريخ الدفع",
-                            value=date.today(),
-                            help="تاريخ استلام المبلغ"
-                        )
-                    
-                    notes = st.text_area(
-                        "ملاحظات (اختياري)",
-                        placeholder="أي ملاحظات على الدفعة..."
-                    )
-                    
-                    # عرض الحالة الجديدة المتوقعة
-                    new_paid_amount = selected_payment.paid_amount + paid_now
-                    new_remaining = selected_payment.remaining_amount - paid_now
-                    
-                    if new_remaining <= 0:
-                        expected_status = "✅ مدفوع كامل"
-                        status_color = "green"
-                    elif new_paid_amount > 0:
-                        expected_status = "🟡 مدفوع جزئياً"
-                        status_color = "orange"
-                    else:
-                        expected_status = "⏳ مستحق"
-                        status_color = "blue"
-                    
-                    st.markdown(f"""
-                    <div style="background-color: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid {status_color};">
-                        <h4>📊 ملخص بعد الدفع:</h4>
-                        <ul>
-                            <li>إجمالي المدفوع: <strong>{new_paid_amount:,.0f} ريال</strong></li>
-                            <li>المتبقي: <strong>{new_remaining:,.0f} ريال</strong></li>
-                            <li>الحالة الجديدة: <strong>{expected_status}</strong></li>
-                        </ul>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    st.markdown("---")
-                    
-                    col_btn1, col_btn2 = st.columns([3, 1])
-                    with col_btn1:
-                        submit_payment = st.form_submit_button(
-                            "✅ تأكيد السداد",
-                            type="primary",
-                            use_container_width=True
-                        )
-                    
-                    if submit_payment:
-                        if paid_now <= 0:
-                            st.error("⚠️ المبلغ المدفوع يجب أن يكون أكبر من صفر")
-                        else:
-                            # تحديث الدفعة
-                            p_obj = session.get(Payment, pay_id)
-                            
-                            # التأكد من القيم الحالية
-                            current_paid = p_obj.paid_amount if p_obj.paid_amount else 0.0
-                            current_remaining = p_obj.remaining_amount if p_obj.remaining_amount else p_obj.total
-                            
-                            # التحقق من عدم تجاوز المتبقي
-                            if paid_now > current_remaining:
-                                st.error(f"⚠️ المبلغ المدفوع ({paid_now:,.0f}) أكبر من المبلغ المتبقي ({current_remaining:,.0f})")
-                            else:
-                                # تحديث المبالغ
-                                p_obj.paid_amount = current_paid + paid_now
-                                p_obj.remaining_amount = current_remaining - paid_now
-                                p_obj.paid_date = payment_date
-                                p_obj.payment_method = payment_method
-                                
-                                # تحديد الحالة
-                                if p_obj.remaining_amount <= 0.01:
-                                    p_obj.status = "مدفوع"
-                                    p_obj.remaining_amount = 0
-                                    p_obj.paid_amount = p_obj.total
-                                else:
-                                    p_obj.status = "مدفوع جزئياً"
-                                
-                                session.commit()
-                                session.refresh(p_obj)  # تحديث الكائن من قاعدة البيانات
-                                
-                                payment_display_num = p_obj.payment_number if p_obj.payment_number else pay_id
-                                
-                                if p_obj.status == "مدفوع":
-                                    st.success(f"✅ تم تسجيل سداد كامل للدفعة #{payment_display_num} بمبلغ {paid_now:,.0f} ريال عبر {payment_method}")
-                                    st.balloons()
-                                else:
-                                    st.success(f"🟡 تم تسجيل سداد جزئي للدفعة #{payment_display_num} بمبلغ {paid_now:,.0f} ريال. المتبقي: {new_remaining:,.0f} ريال")
-                                st.rerun()
-            else:
-                st.success("✅ تم سداد جميع الدفعات لهذا العقد بالكامل!")
+    contract_map = {
+        f"عقد #{c.contract_number or c.id} - {c.tenant.name}": c
+        for c in contracts
+    }
 
-def get_csv_download_link(df, filename, label):
-    # دالة مساعدة لتحميل البيانات إلى CSV
-    csv = df.to_csv(index=False, encoding='utf-8-sig')
-    b64 = base64.b64encode(csv.encode()).decode()  
-    href = f'<a href="data:file/csv;charset=utf-8-sig;base64,{b64}" download="{filename}">{label}</a>'
-    return href
+    selected_label = st.selectbox("اختر العقد", contract_map.keys())
+    contract = contract_map[selected_label]
+
+    # ----------------------------------
+    # معلومات العقد
+    # ----------------------------------
+    with st.expander("📋 معلومات العقد"):
+        c1, c2, c3 = st.columns(3)
+        c1.write(f"**المستأجر:** {contract.tenant.name}")
+        c1.write(f"**نوع العقد:** {contract.contract_type}")
+
+        c2.write(f"**الإيجار السنوي:** {contract.rent_amount:,.0f} ريال")
+        c2.write(f"**الدورية:** {contract.payment_freq}")
+
+        c3.write(f"**بداية العقد:** {contract.start_date}")
+        c3.write(f"**نهاية العقد:** {contract.end_date}")
+
+    # ----------------------------------
+    # جلب الدفعات
+    # ----------------------------------
+    payments = session.query(Payment)\
+        .filter(Payment.contract_id == contract.id)\
+        .order_by(Payment.due_date)\
+        .all()
+
+    # ----------------------------------
+    # توليد الدفعات (لو غير موجودة)
+    # ----------------------------------
+    if not payments:
+        st.info("لم يتم توليد دفعات لهذا العقد")
+
+        if st.button("🔄 توليد الدفعات تلقائياً", type="primary", use_container_width=True):
+
+            if not contract.rent_amount or contract.rent_amount <= 0:
+                st.error("❌ مبلغ العقد غير صحيح")
+                return
+
+            from dateutil.relativedelta import relativedelta
+
+            freq_map = {"شهري": 1, "ربع سنوي": 3, "نصف سنوي": 6, "سنوي": 12}
+            step = freq_map.get(contract.payment_freq, 12)
+
+            # حساب مدة العقد بالأشهر
+            total_months = (contract.end_date.year - contract.start_date.year) * 12 + \
+                           (contract.end_date.month - contract.start_date.month)
+
+            num_payments = total_months // step
+            amount_per_payment = float(contract.rent_amount) / num_payments
+
+            vat_rate = float(contract.vat_rate or 0)
+            if vat_rate >= 1:
+                vat_rate /= 100
+
+            payments_to_add = []
+            due_date = contract.start_date
+
+            for i in range(1, num_payments + 1):
+                vat_value = round(amount_per_payment * vat_rate, 2)
+                total = round(amount_per_payment + vat_value, 2)
+
+                payments_to_add.append(Payment(
+                    contract_id=contract.id,
+                    payment_number=i,
+                    due_date=due_date,
+                    amount=round(amount_per_payment, 2),
+                    vat=vat_value,
+                    total=total,
+                    paid_amount=0.0,
+                    remaining_amount=total,
+                    status="مستحق"
+                ))
+
+                due_date += relativedelta(months=step)
+
+            session.add_all(payments_to_add)
+            session.commit()
+
+            st.success(f"✅ تم توليد {len(payments_to_add)} دفعة بنجاح")
+            st.rerun()
+
+    # ----------------------------------
+    # ملخص مالي
+    # ----------------------------------
+    if payments:
+        st.markdown("---")
+
+        total_contract = sum(p.total or 0 for p in payments)
+        total_paid = sum(p.paid_amount or 0 for p in payments)
+        total_remaining = sum(p.remaining_amount or 0 for p in payments)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("إجمالي العقد", f"{total_contract:,.0f} ر.س")
+        c2.metric("المحصل", f"{total_paid:,.2f} ر.س")
+        c3.metric("المتبقي", f"{total_remaining:,.2f} ر.س")
+
+        st.progress(min(1.0, total_paid / total_contract) if total_contract else 0)
+
+        # ----------------------------------
+        # جدول الدفعات
+        # ----------------------------------
+        df = pd.DataFrame([{
+            "رقم": p.payment_number,
+            "تاريخ الاستحقاق": p.due_date,
+            "الإجمالي": p.total,
+            "المدفوع": p.paid_amount,
+            "المتبقي": p.remaining_amount,
+            "الحالة": p.status,
+            "طريقة السداد": p.payment_method or "-",
+        } for p in payments])
+
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        # ----------------------------------
+        # تسجيل تحصيل
+        # ----------------------------------
+        unpaid = [p for p in payments if p.remaining_amount and p.remaining_amount > 0]
+
+        st.markdown("### 💳 تسجيل تحصيل جديد")
+
+        if unpaid:
+            with st.form("payment_form"):
+                options = {
+                    f"دفعة {p.payment_number} (متبقي {p.remaining_amount:,.2f})": p.id
+                    for p in unpaid
+                }
+
+                label = st.selectbox("اختر الدفعة", options.keys())
+                payment = session.get(Payment, options[label])
+
+                col1, col2 = st.columns(2)
+                amount = col1.number_input(
+                    "المبلغ المحصل",
+                    min_value=0.01,
+                    max_value=float(payment.remaining_amount),
+                    value=float(payment.remaining_amount)
+                )
+
+                method = col2.selectbox(
+                    "طريقة السداد",
+                    ["تحويل بنكي", "نقدي", "شيك", "منصة إيجار"]
+                )
+
+                if st.form_submit_button("✅ تسجيل السداد", use_container_width=True):
+                    payment.paid_amount = (payment.paid_amount or 0) + amount
+                    payment.remaining_amount = max(
+                        0, (payment.total or 0) - payment.paid_amount
+                    )
+                    payment.payment_method = method
+                    payment.paid_date = date.today()
+                    payment.status = "مدفوع" if payment.remaining_amount == 0 else "مدفوع جزئياً"
+
+                    session.commit()
+                    st.success("✅ تم تسجيل السداد")
+                    st.rerun()
+        else:
+            st.success("🎉 تم تحصيل جميع دفعات العقد")
 
 def reports_page():
-    st.header("📑 التقارير الرسمية")
-    
-    rtype = st.radio("اختر التقرير", ["تقرير مالي شامل", "تقرير المستأجر التفصيلي", "المتأخرات"], horizontal=True)
-    
-    if rtype == "تقرير مالي شامل":
-        st.markdown("#### 🔍 فلترة التقرير")
-        
-        # الفلاتر
+    st.header("📑 التقارير")
+
+    report_type = st.radio(
+        "اختر نوع التقرير",
+        ["تقرير مالي شامل", "المتأخرات", "تقرير المستأجر التفصيلي"],
+        horizontal=True
+    )
+
+   # ======================================================
+    # 📊 التقرير المالي الشامل (النسخة المصلحة لهيكلة linked_units_ids)
+    # ======================================================
+    if report_type == "تقرير مالي شامل":
+        assets = session.query(Asset).all()
+        asset_names = ["الكل"] + [a.name for a in assets]
+
         col1, col2, col3 = st.columns(3)
-        
         with col1:
-            # فلتر الأصول
-            all_assets = session.query(Asset).all()
-            asset_options = ["الكل"] + [a.name for a in all_assets]
-            selected_asset = st.selectbox("اختر الأصل", asset_options, key="report_asset_filter")
-        
+            selected_asset = st.selectbox("الأصل", asset_names)
         with col2:
-            # فلتر الوحدات (بناءً على الأصل المختار)
-            if selected_asset != "الكل":
-                selected_asset_obj = session.query(Asset).filter_by(name=selected_asset).first()
-                if selected_asset_obj:
-                    units_in_asset = session.query(Unit).filter_by(asset_id=selected_asset_obj.id).all()
-                    unit_options = ["الكل"] + [u.unit_number for u in units_in_asset]
-                    selected_unit = st.selectbox("اختر الوحدة", unit_options, key="report_unit_filter")
-                else:
-                    selected_unit = "الكل"
-            else:
-                selected_unit = "الكل"
-                st.selectbox("اختر الوحدة", ["الكل (اختر أصل أولاً)"], disabled=True, key="report_unit_disabled")
-        
+            selected_status = st.selectbox(
+                "حالة الدفعة",
+                ["الكل", "مدفوع", "مدفوع جزئياً", "مستحق"]
+            )
         with col3:
-            # فلتر الحالة
-            status_options = ["الكل", "مدفوع", "مدفوع جزئياً", "مستحق"]
-            selected_status = st.selectbox("حالة الدفعة", status_options, key="report_status_filter")
-        
-        st.markdown("---")
-        
-        # بناء الاستعلام مع الفلاتر
+            limit = st.number_input("عدد الصفوف", 100, 5000, 1000)
+
+        # 1. استعلام الدفعات مع العقود والمستأجرين فقط (بدون الأصول حالياً)
         query = session.query(
-            Payment.id.label("رقم الدفعة"), 
-            Contract.contract_number.label("رقم العقد"),
+            Payment.id.label("رقم"),
+            Contract.contract_number.label("العقد"),
             Tenant.name.label("المستأجر"),
-            Payment.due_date.label("تاريخ الاستحقاق"), 
-            Payment.total.label("المبلغ الإجمالي"),
-            Payment.paid_amount.label("المبلغ المدفوع"),
+            Contract.linked_units_ids, # سنجلب هذا الحقل لنعرف الوحدة
+            Payment.due_date.label("الاستحقاق"),
+            Payment.total.label("الإجمالي"),
+            Payment.paid_amount.label("المدفوع"),
             Payment.remaining_amount.label("المتبقي"),
-            Payment.status.label("الحالة"), 
-            Payment.beneficiary.label("المستفيد")
-        ).select_from(Payment).join(Contract).join(Tenant)
-        # استبعاد العقود الملغية
-        query = query.filter(Contract.status == "نشط")
-        
-        # تطبيق الفلاتر
-        if selected_asset != "الكل":
-            # الحصول على IDs الوحدات في الأصل المختار
-            asset_obj = session.query(Asset).filter_by(name=selected_asset).first()
-            if asset_obj:
-                if selected_unit != "الكل":
-                    # وحدة محددة
-                    unit_obj = session.query(Unit).filter_by(
-                        asset_id=asset_obj.id,
-                        unit_number=selected_unit
-                    ).first()
-                    if unit_obj:
-                        # البحث عن العقود المرتبطة بهذه الوحدة
-                        query = query.filter(Contract.linked_units_ids.like(f"%{unit_obj.id}%"))
-                else:
-                    # كل الوحدات في الأصل
-                    units_ids = [u.id for u in session.query(Unit).filter_by(asset_id=asset_obj.id).all()]
-                    if units_ids:
-                        # البحث عن العقود المرتبطة بأي وحدة في هذا الأصل
-                        filters = [Contract.linked_units_ids.like(f"%{uid}%") for uid in units_ids]
-                        from sqlalchemy import or_
-                        query = query.filter(or_(*filters))
-        
+            Payment.status.label("الحالة"),
+            Payment.payment_method.label("طريقة السداد")
+        ).select_from(Payment)\
+         .join(Contract, Payment.contract_id == Contract.id)\
+         .join(Tenant, Contract.tenant_id == Tenant.id)\
+         .filter(Contract.status == "نشط")
+
         if selected_status != "الكل":
             query = query.filter(Payment.status == selected_status)
-        
-        df = pd.read_sql(query.statement, session.bind)
-        
-        if not df.empty:
-            # عرض الإحصائيات
-            col_stat1, col_stat2, col_stat3 = st.columns(3)
-            with col_stat1:
-                st.metric("إجمالي الدفعات", len(df))
-            with col_stat2:
-                total_amount = df["المبلغ الإجمالي"].sum()
-                st.metric("إجمالي المبلغ", f"{total_amount:,.0f} ريال")
-            with col_stat3:
-                total_remaining = df["المتبقي"].sum() if "المتبقي" in df.columns else 0
-                st.metric("إجمالي المتبقي", f"{total_remaining:,.0f} ريال")
-            
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            
-            csv_data = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                "⬇️ تحميل CSV للتقرير الشامل", 
-                csv_data, 
-                f"financial_report_{selected_asset}_{selected_unit}.csv", 
-                "text/csv"
-            )
-        else:
-            st.info("لا توجد بيانات تطابق الفلاتر المحددة")
 
-    elif rtype == "المتأخرات":
-        query = session.query(
-            Tenant.name.label("المستأجر"), 
-            Tenant.phone.label("هاتف المستأجر"), 
-            Payment.due_date.label("تاريخ الاستحقاق"), 
-            Payment.total.label("المبلغ المتأخر")
-        ).select_from(Payment).join(Contract).join(Tenant).filter(
-            Payment.status != 'مدفوع', 
-            Payment.due_date < date.today(),
-            Contract.status == "نشط"  # ← استبعاد العقود الملغية
+        query = query.limit(limit)
+        df = pd.read_sql(query.statement, session.bind)
+
+        if df.empty:
+            st.info("لا توجد بيانات")
+            return
+
+        # 2. ربط "الأصل" برمجياً (لأن الحقل linked_units_ids نصي)
+        # سنقوم بإنشاء قاموس للوحدات والأصول لتسريع العملية
+        units = session.query(Unit).all()
+        unit_to_asset = {str(u.id): (session.query(Asset).filter_by(id=u.asset_id).first().name if u.asset_id else "بدون أصل") for u in units}
+        
+        def get_asset_name(unit_ids_str):
+            if not unit_ids_str: return "غير محدد"
+            # نأخذ أول معرف وحدة موجود في النص
+            first_unit_id = unit_ids_str.split(',')[0].strip()
+            return unit_to_asset.get(first_unit_id, "غير معروف")
+
+        df['الأصل'] = df['linked_units_ids'].apply(get_asset_name)
+
+        # 3. التصفية حسب الأصل بعد المعالجة
+        if selected_asset != "الكل":
+            df = df[df['الأصل'] == selected_asset]
+
+        # 4. معالجة القيم الفارغة للحسابات
+        for col in ['الإجمالي', 'المدفوع', 'المتبقي']:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+        # ================= عرض النتائج =================
+        if df.empty:
+            st.warning("لا توجد نتائج لهذا الأصل")
+            return
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("عدد الدفعات", len(df))
+        c2.metric("إجمالي المبلغ", f"{df['الإجمالي'].sum():,.0f} ر.س")
+        c3.metric("إجمالي المتبقي", f"{df['المتبقي'].sum():,.0f} ر.س")
+
+        # إخفاء العمود التقني قبل العرض
+        display_df = df.drop(columns=['linked_units_ids'])
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "⬇️ تحميل CSV",
+            display_df.to_csv(index=False).encode("utf-8-sig"),
+            "financial_report.csv",
+            "text/csv"
         )
-    
-        
-        df = pd.read_sql(query.statement, session.bind)
-        if not df.empty:
-            st.error(f"إجمالي المتأخرات: {df['المبلغ المتأخر'].sum():,.2f} ريال")
-            st.dataframe(df)
-            csv_data = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("⬇️ تحميل CSV لتقرير المتأخرات", csv_data, "overdue_report.csv", "text/csv")
-        else:
-            st.success("لا توجد متأخرات")
 
-    elif rtype == "تقرير المستأجر التفصيلي":
+    # ======================================================
+    # ⏰ تقرير المتأخرات
+    # ======================================================
+    elif report_type == "المتأخرات":
+        query = session.query(
+            Tenant.name.label("المستأجر"),
+            Tenant.phone.label("الهاتف"),
+            Payment.due_date.label("تاريخ الاستحقاق"),
+            Payment.remaining_amount.label("المبلغ المتأخر"),
+            Payment.payment_method.label("طريقة السداد")
+        ).select_from(Payment)\
+         .join(Contract, Payment.contract_id == Contract.id)\
+         .join(Tenant, Contract.tenant_id == Tenant.id)\
+         .filter(
+             Payment.remaining_amount > 0,
+             Payment.due_date < date.today(),
+             Contract.status == "نشط"
+         )
+
+        df = pd.read_sql(query.statement, session.bind)
+
+        if df.empty:
+            st.success("✅ لا توجد متأخرات")
+            return
+
+        st.error(f"💰 إجمالي المتأخرات: {df['المبلغ المتأخر'].sum():,.2f} ر.س")
+        st.dataframe(df, use_container_width=True)
+
+        st.download_button(
+            "⬇️ تحميل تقرير المتأخرات",
+            df.to_csv(index=False).encode("utf-8-sig"),
+            "overdue_report.csv",
+            "text/csv"
+        )
+
+    # ======================================================
+    # 🧾 تقرير المستأجر التفصيلي
+    # ======================================================
+    else:
         tenants = session.query(Tenant).all()
-        t_sel = st.selectbox("اختر المستأجر", [t.name for t in tenants])
-        
-        if t_sel:
-            t_obj = session.query(Tenant).filter_by(name=t_sel).first()
-            st.markdown(f"### 👤 {t_obj.name}")
-            st.text(f"النوع: {t_obj.type} | الهاتف: {t_obj.phone}")
-            
-            all_payments_data = [] 
-            
-            # عقود المستأجر
-            # عقود المستأجر (النشطة فقط)
-            contracts = session.query(Contract).filter_by(tenant_id=t_obj.id, status="نشط").all()
-            for c in contracts:
-                with st.expander(f"عقد رقم {c.id} ({c.contract_type}) - يبدأ {c.start_date}"):
-                    # الوحدات
-                    u_ids = c.linked_units_ids.split(',') if c.linked_units_ids else []
-                    if u_ids:
-                        u_names = []
-                        for uid in u_ids:
-                            u = session.get(Unit, int(uid))
-                            if u: u_names.append(f"{u.unit_number} ({u.asset.name})")
-                        st.write(f"**الوحدات:** {', '.join(u_names)}")
-                    
-                    # ملخص مالي للعقد
-                    pays_query = session.query(Payment).filter_by(contract_id=c.id)
-                    pays = pays_query.all()
-                    
-                    paid = sum([p.total for p in pays if p.status=='مدفوع'])
-                    remaining = sum([p.total for p in pays if p.status!='مدفوع'])
-                    
-                    c1, c2 = st.columns(2)
-                    c1.metric("مدفوع", f"{paid:,.2f}")
-                    c2.metric("متبقي/متأخر", f"{remaining:,.2f}")
-                    
-                    # جدول الدفعات
-                    p_data_df = pd.DataFrame([{
-                        'رقم العقد': c.id,
-                        'تاريخ الاستحقاق': p.due_date, 
-                        'المبلغ الإجمالي': p.total, 
-                        'المبلغ (بدون VAT)': p.amount,
-                        'VAT': p.vat,
-                        'تاريخ الدفع': p.paid_date,
-                        'الحالة': p.status
-                    } for p in pays])
-                    st.dataframe(p_data_df)
-                    
-                    all_payments_data.append(p_data_df)
-            
-            st.markdown("---")
-            # --- زر التحميل لملف اكسل (CSV) ---
-            if all_payments_data:
-                combined_df = pd.concat(all_payments_data, ignore_index=True)
-                csv_data = combined_df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    label=f"⬇️ تحميل تقرير الدفعات لـ {t_sel} (CSV)",
-                    data=csv_data,
-                    file_name=f"تقرير_دفعات_{t_sel}.csv",
-                    mime="text/csv"
-                )
+        if not tenants:
+            st.warning("لا يوجد مستأجرين")
+            return
+
+        tenant_name = st.selectbox("اختر المستأجر", [t.name for t in tenants])
+        tenant = session.query(Tenant).filter(Tenant.name == tenant_name).first()
+
+        contracts = session.query(Contract)\
+            .filter(Contract.tenant_id == tenant.id, Contract.status == "نشط")\
+            .all()
+
+        rows = []
+        for contract in contracts:
+            payments = session.query(Payment).filter(Payment.contract_id == contract.id).all()
+            for pay in payments:
+                rows.append({
+                    "العقد": contract.contract_number or contract.id,
+                    "الاستحقاق": pay.due_date,
+                    "الإجمالي": pay.total,
+                    "المدفوع": pay.paid_amount,
+                    "المتبقي": pay.remaining_amount,
+                    "الحالة": pay.status,
+                    "طريقة السداد": pay.payment_method
+                })
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            st.info("لا توجد بيانات لهذا المستأجر")
+            return
+
+        st.dataframe(df, use_container_width=True)
+        st.download_button(
+            "⬇️ تحميل تقرير المستأجر",
+            df.to_csv(index=False).encode("utf-8-sig"),
+            f"tenant_{tenant.name}.csv",
+            "text/csv"
+        )
+
 
 def settings_page():
     st.header("⚙️ إعدادات المستخدم")
